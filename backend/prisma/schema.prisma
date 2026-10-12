@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum UserRole { 
+ ADMIN
+ SALES_MANAGER
+ BDE
+}
+enum LeadStage { 
+ NEW_LEAD
+ CONTACTED
+ INTERESTED
+ MEETING
+ PROPOSAL
+ NEGOTIATION
+ WON
+ LOST
+}
+enum LeadPriority { 
+ HOT
+ WARM
+ COLD
+}
+enum FollowUpStatus { 
+ PENDING
+ COMPLETED
+ RESCHEDULED
+ CANCELLED
+}
+model User {
+ id String @id @default(uuid())
+ fullName String @map("full_name")
+ email String @unique
+ passwordHash String @map("password_hash")
+ role UserRole @default(BDE)
+ isActive Boolean @default(true) @map("is_active")
+ leads Lead[] @relation("AssignedBde")
+ activities Activity[] @relation("ActivityUser")
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ @@map("users")
+}
+model Lead {
+ id String @id @default(uuid())
+ leadNumber String @unique @map("lead_number")
+ customerName String @map("customer_name")
+ businessName String? @map("business_name")
+ businessCategory String? @map("business_category")
+ mobileNumber String @map("mobile_number")
+ email String?
+ location String?
+ requirement String?
+ estimatedBudget Decimal? @map("estimated_budget")
+ leadSource String @map("lead_source")
+ priority LeadPriority @default(WARM)
+ assignedBdeId String @map("assigned_bde_id")
+ assignedBde User @relation("AssignedBde", fields:[assignedBdeId], references:[id])
+ stage LeadStage @default(NEW_LEAD)
+ nextAction String? @map("next_action")
+ followUpAt DateTime? @map("follow_up_at")
+ finalDealValue Decimal? @map("final_deal_value")
+ wonService String? @map("won_service")
+ paymentStatus String? @map("payment_status")
+ expectedStartDate DateTime? @map("expected_start_date")
+ wonRemarks String? @map("won_remarks")
+ lostReason String? @map("lost_reason")
+ stageEnteredAt DateTime @default(now()) @map("stage_entered_at")
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ activities Activity[]
+ followUps FollowUp[]
+ proposals Proposal[]
+ meetings Meeting[]
+ negotiations Negotiation[]
+ @@index([stage])
+ @@index([followUpAt])
+ @@map("leads")
+}
+model Activity {
+ id String @id @default(uuid())
+ leadId String @map("lead_id")
+ lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ userId String? @map("user_id")
+ user User? @relation("ActivityUser", fields: [userId], references: [id], onDelete: SetNull)
+ type String
+ description String
+ outcome String?
+ nextAction String? @map("next_action")
+ previousStage LeadStage? @map("previous_stage")
+ newStage LeadStage? @map("new_stage")
+ createdAt DateTime @default(now()) @map("created_at")
+ @@index([leadId, createdAt])
+ @@map("activities")
+}
+model FollowUp {
+ id String @id @default(uuid())
+ leadId String @map("lead_id")
+ lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ dueAt DateTime @map("due_at")
+ type String
+ nextAction String @map("next_action")
+ remarks String?
+ status FollowUpStatus @default(PENDING)
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ @@index([status, dueAt])
+ @@map("follow_ups")
+}
+model Proposal {
+ id String @id @default(uuid())
+ leadId String @map("lead_id")
+ lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ proposalNumber String @unique @map("proposal_number")
+ proposalDate DateTime @default(now()) @map("proposal_date")
+ serviceProduct String @map("service_product")
+ proposalAmount Decimal @map("proposal_amount")
+ discount Decimal @default(0)
+ tax Decimal @default(0)
+ finalAmount Decimal @map("final_amount")
+ validityUntil DateTime? @map("validity_until")
+ sentAt DateTime? @map("sent_at")
+ customerResponse String? @map("customer_response")
+ followUpAt DateTime? @map("follow_up_at")
+ remarks String?
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ @@index([leadId, proposalDate])
+ @@map("proposals")
+}
+model Meeting {
+ id String @id @default(uuid())
+ leadId String @map("lead_id")
+ lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ meetingAt DateTime @map("meeting_at")
+ type String
+ participants String?
+ requirement String?
+ budget Decimal?
+ discussionNotes String? @map("discussion_notes")
+ customerConcerns String? @map("customer_concerns")
+ nextAction String @map("next_action")
+ followUpAt DateTime @map("follow_up_at")
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ @@index([meetingAt])
+ @@index([leadId, meetingAt])
+ @@map("meetings")
+}
+model Negotiation {
+ id String @id @default(uuid())
+ leadId String @map("lead_id")
+ lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ originalProposalAmount Decimal? @map("original_proposal_amount")
+ customerExpectedAmount Decimal? @map("customer_expected_amount")
+ negotiatedAmount Decimal? @map("negotiated_amount")
+ customerConcern String? @map("customer_concern")
+ competitorInformation String? @map("competitor_information")
+ nextAction String @map("next_action")
+ followUpAt DateTime @map("follow_up_at")
+ remarks String?
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @updatedAt @map("updated_at")
+ @@index([leadId, createdAt])
+ @@map("negotiations")
+}

@@ -1,0 +1,105 @@
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { LeadStage } from "@prisma/client";
+import { PrismaService } from "../../prisma/prisma.service";
+import { StageTransitionService } from "../pipeline/stage-transition.service";
+import { CreateNegotiationDto } from "./dto/create-negotiation.dto";
+
+type Actor = { sub: string; role: string };
+
+@Injectable()
+export class NegotiationsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly transitions: StageTransitionService,
+  ) {}
+
+  list(user: Actor) {
+    return this.prisma.negotiation.findMany({
+      where:
+        user.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : undefined,
+      include: {
+        lead: { include: { assignedBde: { select: { fullName: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  async create(dto: CreateNegotiationDto, user: Actor) {
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: dto.leadId },
+    });
+    if (!lead) throw new NotFoundException("Lead not found");
+    if (user.role === "BDE" && lead.assignedBdeId !== user.sub)
+      throw new ForbiddenException(
+        "BDE users can only negotiate their assigned leads",
+      );
+    if (lead.stage === LeadStage.WON || lead.stage === LeadStage.LOST)
+      throw new BadRequestException("Closed leads cannot enter negotiation");
+    if (lead.stage !== LeadStage.NEGOTIATION)
+      this.transitions.assertAllowed(lead.stage, LeadStage.NEGOTIATION);
+    const latestProposal = await this.prisma.proposal.findFirst({
+      where: { leadId: lead.id },
+      orderBy: { proposalDate: "desc" },
+    });
+    const originalProposalAmount =
+      dto.originalProposalAmount ??
+      (latestProposal ? Number(latestProposal.finalAmount) : undefined);
+
+    return this.prisma.$transaction(async (tx) => {
+      const stageChanged = lead.stage !== LeadStage.NEGOTIATION;
+      await tx.lead.update({
+        where: { id: lead.id },
+        data: {
+          stage: LeadStage.NEGOTIATION,
+          stageEnteredAt: stageChanged ? new Date() : undefined,
+          nextAction: dto.nextAction,
+          followUpAt: new Date(dto.followUpAt),
+          activities: {
+            create: {
+              type: "NEGOTIATION",
+              description: dto.customerConcern
+                ? `Negotiation started: ${dto.customerConcern}`
+                : "Negotiation started",
+              userId: user.sub,
+              previousStage: stageChanged ? lead.stage : undefined,
+              newStage: stageChanged ? LeadStage.NEGOTIATION : undefined,
+            },
+          },
+          followUps: {
+            create: {
+              dueAt: new Date(dto.followUpAt),
+              type: "Negotiation",
+              nextAction: dto.nextAction,
+            },
+          },
+        },
+      });
+      return tx.negotiation.create({
+        data: {
+          leadId: lead.id,
+          originalProposalAmount,
+          customerExpectedAmount: dto.customerExpectedAmount,
+          negotiatedAmount: dto.negotiatedAmount,
+          customerConcern: dto.customerConcern,
+          competitorInformation: dto.competitorInformation,
+          nextAction: dto.nextAction,
+          followUpAt: new Date(dto.followUpAt),
+          remarks: dto.remarks,
+        },
+        include: {
+          lead: {
+            select: {
+              customerName: true,
+              assignedBde: { select: { fullName: true } },
+            },
+          },
+        },
+      });
+    });
+  }
+}
