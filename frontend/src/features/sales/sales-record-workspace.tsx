@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { apiClient } from "../../lib/api-client";
 
-type Kind = "proposals" | "meetings" | "negotiations";
+type Kind = "proposals" | "negotiations";
 type LeadOption = {
   id: string;
   customerName: string;
@@ -56,44 +56,6 @@ const configs: Record<
       { name: "remarks", label: "Remarks" },
     ],
   },
-  meetings: {
-    title: "Meetings",
-    eyebrow: "CUSTOMER CONVERSATIONS",
-    description:
-      "Schedule discussions and capture requirements, concerns, and next steps.",
-    fields: [
-      {
-        name: "meetingAt",
-        label: "Meeting date and time",
-        type: "datetime-local",
-        required: true,
-      },
-      {
-        name: "type",
-        label: "Meeting type",
-        required: true,
-        options: [
-          "Online Meeting",
-          "Offline Meeting",
-          "Product Demo",
-          "Requirement Discussion",
-          "Business Discussion",
-        ],
-      },
-      { name: "participants", label: "Participants" },
-      { name: "requirement", label: "Requirement" },
-      { name: "budget", label: "Budget (₹)", type: "number" },
-      { name: "discussionNotes", label: "Discussion notes" },
-      { name: "customerConcerns", label: "Customer concerns" },
-      {
-        name: "followUpAt",
-        label: "Next follow-up",
-        type: "datetime-local",
-        required: true,
-      },
-      { name: "nextAction", label: "Next action", required: true },
-    ],
-  },
   negotiations: {
     title: "Negotiations",
     eyebrow: "COMMERCIAL DISCUSSIONS",
@@ -133,13 +95,11 @@ const numericFields = new Set([
   "proposalAmount",
   "discount",
   "tax",
-  "budget",
   "originalProposalAmount",
   "customerExpectedAmount",
   "negotiatedAmount",
 ]);
 const dateFields = new Set([
-  "meetingAt",
   "followUpAt",
   "validityUntil",
   "sentAt",
@@ -165,14 +125,17 @@ const date = (value: unknown) =>
 export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
   const config = configs[kind];
   const [records, setRecords] = useState<SalesRecord[]>([]);
+  const [page, setPage] = useState(1);
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [form, setForm] = useState<Record<string, string>>({ leadId: "" });
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
 
-  async function load() {
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
       const [rows, leadRows] = await Promise.all([
         apiClient<SalesRecord[]>(`/${kind}`),
@@ -184,24 +147,37 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
       );
       setNotice("");
     } catch (error) {
+      setRecords([]);
+      setLeads([]);
       setNotice(
         error instanceof Error
           ? error.message
           : `Unable to load ${config.title.toLowerCase()}.`,
       );
+    } finally {
+      setLoading(false);
     }
-  }
+  }, [config, kind]);
 
   useEffect(() => {
+    setPage(1);
     void load();
-  }, [kind]);
+  }, [load]);
+
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(records.length / pageSize));
+  const visibleRecords = records.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   async function createRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     const body: Record<string, unknown> = { leadId: form.leadId };
     for (const field of config.fields) {
-      const value = form[field.name];
+      const value = form[field.name] ?? field.options?.[0];
       if (!value) continue;
       body[field.name] = numericFields.has(field.name)
         ? Number(value)
@@ -295,39 +271,6 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
           </button>
         </>
       );
-    if (kind === "meetings")
-      return (
-        <>
-          <div>
-            <span>When</span>
-            <strong>{date(record.meetingAt)}</strong>
-          </div>
-          <div>
-            <span>Type</span>
-            <strong>{text(record.type)}</strong>
-          </div>
-          <div>
-            <span>Participants</span>
-            <strong>{text(record.participants)}</strong>
-          </div>
-          <div>
-            <span>Budget</span>
-            <strong>{money(record.budget)}</strong>
-          </div>
-          <div className="record-notes">
-            <span>Discussion</span>
-            <strong>{text(record.discussionNotes)}</strong>
-          </div>
-          <div className="record-notes">
-            <span>Concerns</span>
-            <strong>{text(record.customerConcerns)}</strong>
-          </div>
-          <div>
-            <span>Next action</span>
-            <strong>{text(record.nextAction)}</strong>
-          </div>
-        </>
-      );
     return (
       <>
         <div>
@@ -386,7 +329,12 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
         </div>
       )}
       <div className="sales-record-list">
-        {records.map((record) => (
+        {loading && (
+          <p className="dashboard-loading">
+            Loading {config.title.toLowerCase()}...
+          </p>
+        )}
+        {visibleRecords.map((record) => (
           <article className="sales-record" key={record.id}>
             <div className="sales-record-heading">
               <div>
@@ -406,12 +354,39 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
             <div className="sales-record-fields">{recordSummary(record)}</div>
           </article>
         ))}
-        {records.length === 0 && (
+        {!loading && !notice && records.length === 0 && (
           <div className="empty-list">
             No {config.title.toLowerCase()} recorded yet.
           </div>
         )}
       </div>
+      {!loading && (
+        <nav className="pagination" aria-label={`${config.title} pagination`}>
+          <span>
+            {records.length} {records.length === 1 ? config.title.slice(0, -1).toLowerCase() : config.title.toLowerCase()} ·
+            Page {page} of {totalPages}
+          </span>
+          <div className="pagination-controls">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page === 1}
+            >
+              Previous
+            </button>
+            <strong>{page} / {totalPages}</strong>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={page === totalPages}
+            >
+              Next
+            </button>
+          </div>
+        </nav>
+      )}
       {showForm && (
         <div
           className="modal-backdrop"

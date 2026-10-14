@@ -1,7 +1,7 @@
 import { LeadStage } from "@prisma/client";
 
 const ALLOWED_TRANSITIONS: Partial<Record<LeadStage, LeadStage[]>> = {
-  NEW_LEAD: ["CONTACTED", "LOST"],
+  NEW_LEAD: ["CONTACTED", "MEETING", "LOST"],
   CONTACTED: ["INTERESTED", "MEETING", "LOST"],
   INTERESTED: ["MEETING", "PROPOSAL", "LOST"],
   MEETING: ["PROPOSAL", "NEGOTIATION", "LOST"],

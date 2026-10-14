@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 import { apiClient } from "../../lib/api-client";
+import { getAuthUser } from "../../lib/auth";
 
 const STAGES = [
   "NEW_LEAD",
@@ -119,14 +121,29 @@ function displayMoney(value?: string | number | null) {
   }).format(Number(value));
 }
 
-export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
+export function LeadWorkspace({
+  view,
+  initialShowForm = false,
+}: {
+  view: "leads" | "pipeline";
+  initialShowForm?: boolean;
+}) {
+  const router = useRouter();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [assignees, setAssignees] = useState<Assignee[]>([]);
   const [form, setForm] = useState<LeadForm>(emptyForm);
   const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
+  const [page, setPage] = useState(1);
+  const [showForm, setShowForm] = useState(initialShowForm);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
+  const [formError, setFormError] = useState("");
+  const [canAssignLeads, setCanAssignLeads] = useState(false);
+  const isAdmin = getAuthUser()?.role === "ADMIN";
+  const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null);
+  const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
+  const [dropTargetStage, setDropTargetStage] = useState<Stage | null>(null);
   const [stageEdit, setStageEdit] = useState<{
     leadId: string;
     stage: Stage;
@@ -140,6 +157,7 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
   const [otherLostReason, setOtherLostReason] = useState("");
 
   async function load() {
+    setLoading(true);
     try {
       const [leadRows, users] = await Promise.all([
         apiClient<Lead[]>("/leads"),
@@ -152,15 +170,20 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
       setNotice(
         error instanceof Error ? error.message : "Unable to load leads.",
       );
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
+    const role = getAuthUser()?.role;
+    setCanAssignLeads(role === "ADMIN" || role === "SALES_MANAGER");
     void load();
   }, []);
 
   async function createLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setFormError("");
     setBusy(true);
     try {
       await apiClient<Lead>("/leads", {
@@ -178,30 +201,75 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
       setShowForm(false);
       setNotice("Lead created and added to New Lead.");
       await load();
+      if (initialShowForm) router.replace("/leads");
     } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "Unable to create lead.",
-      );
+      const message =
+        error instanceof Error ? error.message : "Unable to create lead.";
+      try {
+        const response = JSON.parse(message) as { message?: string | string[] };
+        setFormError(
+          Array.isArray(response.message)
+            ? response.message.join(", ")
+            : response.message || message,
+        );
+      } catch {
+        setFormError(message);
+      }
     } finally {
       setBusy(false);
     }
   }
 
-  async function saveStage(lead: Lead) {
-    if (!stageEdit) return;
+  async function assignLead(lead: Lead, assignedBdeId: string) {
+    try {
+      await apiClient<Lead>(`/leads/${lead.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ assignedBdeId }),
+      });
+      setNotice("Lead assignment updated.");
+      await load();
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Unable to assign this lead.",
+      );
+    }
+  }
+
+  async function deleteLead(lead: Lead) {
+    const confirmed = window.confirm(
+      `Permanently delete ${lead.customerName} (${lead.leadNumber})? Its activities, follow-ups, proposals, meetings, and negotiations will also be deleted. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setDeletingLeadId(lead.id);
+    try {
+      await apiClient(`/leads/${lead.id}`, { method: "DELETE" });
+      setLeads((current) => current.filter((item) => item.id !== lead.id));
+      setNotice(`Lead ${lead.leadNumber} was deleted.`);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Unable to delete lead.",
+      );
+    } finally {
+      setDeletingLeadId(null);
+    }
+  }
+
+  async function saveStage(lead: Lead, targetStage = stageEdit?.stage) {
+    if (!targetStage) return;
     const lostReason =
       lostReasonType === "Other" ? otherLostReason.trim() : lostReasonType;
-    if (stageEdit.stage === "WON" && !finalDealValue.trim()) {
+    if (targetStage === "WON" && !finalDealValue.trim()) {
       setNotice("Enter a final deal value before marking this lead as won.");
       return;
     }
-    if (stageEdit.stage === "WON" && !wonService.trim()) {
+    if (targetStage === "WON" && !wonService.trim()) {
       setNotice(
         "Enter the service or project before marking this lead as won.",
       );
       return;
     }
-    if (stageEdit.stage === "LOST" && !lostReason) {
+    if (targetStage === "LOST" && !lostReason) {
       setNotice("Enter a lost reason before closing this lead.");
       return;
     }
@@ -210,19 +278,18 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
       await apiClient<Lead>(`/leads/${lead.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          stage: stageEdit.stage,
+          stage: targetStage,
           nextAction: lead.nextAction,
           followUpAt: lead.followUpAt,
-          finalDealValue:
-            stageEdit.stage === "WON" ? Number(finalDealValue) : undefined,
-          wonService: stageEdit.stage === "WON" ? wonService : undefined,
-          paymentStatus: stageEdit.stage === "WON" ? paymentStatus : undefined,
+          finalDealValue: targetStage === "WON" ? Number(finalDealValue) : undefined,
+          wonService: targetStage === "WON" ? wonService : undefined,
+          paymentStatus: targetStage === "WON" ? paymentStatus : undefined,
           expectedStartDate:
-            stageEdit.stage === "WON" && expectedStartDate
+            targetStage === "WON" && expectedStartDate
               ? new Date(expectedStartDate).toISOString()
               : undefined,
-          wonRemarks: stageEdit.stage === "WON" ? wonRemarks : undefined,
-          lostReason: stageEdit.stage === "LOST" ? lostReason : undefined,
+          wonRemarks: targetStage === "WON" ? wonRemarks : undefined,
+          lostReason: targetStage === "LOST" ? lostReason : undefined,
         }),
       });
       setStageEdit(null);
@@ -233,7 +300,7 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
       setWonRemarks("");
       setLostReasonType(LOST_REASONS[0]);
       setOtherLostReason("");
-      setNotice(`Lead moved to ${stageName(stageEdit.stage)}.`);
+      setNotice(`Lead moved to ${stageName(targetStage)}.`);
       await load();
     } catch (error) {
       setNotice(
@@ -244,6 +311,24 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
     }
   }
 
+  function handleLeadDrop(lead: Lead, targetStage: Stage) {
+    setDropTargetStage(null);
+    setDraggingLeadId(null);
+    if (lead.stage === targetStage) return;
+
+    setStageEdit({ leadId: lead.id, stage: targetStage });
+    if (targetStage === "WON" || targetStage === "LOST") {
+      setNotice(
+        targetStage === "WON"
+          ? "Complete the deal details on the card to mark this lead as won."
+          : "Choose a lost reason on the card to close this lead.",
+      );
+      return;
+    }
+
+    void saveStage(lead, targetStage);
+  }
+
   const filtered = leads.filter((lead) =>
     [
       lead.customerName,
@@ -252,25 +337,38 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
       lead.assignedBde.fullName,
     ].some((value) => value?.toLowerCase().includes(search.toLowerCase())),
   );
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const visibleLeads = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <main className="lead-workspace">
       <header className="workspace-header">
         <div>
           <p className="eyebrow">SALES WORKSPACE</p>
-          <h1>{view === "pipeline" ? "Sales pipeline" : "Leads"}</h1>
+          <h1>
+            {view === "pipeline" ? "Sales pipeline" : "Leads"}
+          </h1>
           <p className="subtitle">
             {view === "pipeline"
-              ? "Move every opportunity toward a clear next step."
+              ? "Drag lead cards between stages to update each opportunity."
               : "Capture, assign, and keep every active lead moving."}
           </p>
         </div>
         <div className="workspace-actions">
           <Link
             className="secondary-action"
-            href={view === "pipeline" ? "/leads" : "/pipeline"}
+            href={view === "pipeline" ? "/leads" : canAssignLeads ? "#lead-assignment" : "/pipeline"}
           >
-            {view === "pipeline" ? "Lead list" : "Pipeline board"}
+            {view === "pipeline"
+              ? "Lead list"
+              : canAssignLeads
+                ? "Lead assignments"
+                : "Pipeline board"}
           </Link>
           <button className="primary" onClick={() => setShowForm(true)}>
             + Add lead
@@ -294,7 +392,10 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
             aria-label="Search leads"
             placeholder="Search customer, company, BDE..."
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setPage(1);
+              setSearch(event.target.value);
+            }}
           />
         </label>
         <span className="result-count">
@@ -302,19 +403,53 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
         </span>
       </div>
 
-      {view === "pipeline" ? (
+      {loading && leads.length === 0 ? (
+        <p className="dashboard-loading">Loading authorized leads...</p>
+      ) : !loading && notice && leads.length === 0 ? null : view === "pipeline" ? (
         <div className="kanban-board">
           {STAGES.map((stage) => {
             const stageLeads = filtered.filter((lead) => lead.stage === stage);
             return (
-              <section className="kanban-column" key={stage}>
+              <section
+                className={`kanban-column${dropTargetStage === stage ? " kanban-column-drop-target" : ""}`}
+                key={stage}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDropTargetStage(stage);
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node))
+                    setDropTargetStage(null);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const leadId =
+                    event.dataTransfer.getData("text/plain") ||
+                    draggingLeadId;
+                  const draggedLead = leads.find((lead) => lead.id === leadId);
+                  if (draggedLead) handleLeadDrop(draggedLead, stage);
+                }}
+              >
                 <div className="kanban-heading">
                   <h2>{stageName(stage)}</h2>
                   <span>{stageLeads.length}</span>
                 </div>
                 <div className="kanban-cards">
                   {stageLeads.map((lead) => (
-                    <article className="lead-card" key={lead.id}>
+                    <article
+                      className={`lead-card${draggingLeadId === lead.id ? " lead-card-dragging" : ""}`}
+                      draggable
+                      key={lead.id}
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", lead.id);
+                        setDraggingLeadId(lead.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingLeadId(null);
+                        setDropTargetStage(null);
+                      }}
+                    >
                       <div className="lead-card-top">
                         <span
                           className={`priority priority-${lead.priority.toLowerCase()}`}
@@ -485,7 +620,11 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
           })}
         </div>
       ) : (
-        <div className="lead-table-wrap">
+        <>
+          <div
+            className="lead-table-wrap"
+            id={canAssignLeads ? "lead-assignment" : undefined}
+          >
           <table className="lead-table">
             <thead>
               <tr>
@@ -496,10 +635,11 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
                 <th>Assigned BDE</th>
                 <th>Next follow-up</th>
                 <th>Budget</th>
+                {isAdmin && <th>Actions</th>}
               </tr>
             </thead>
             <tbody>
-              {filtered.map((lead) => (
+              {visibleLeads.map((lead) => (
                 <tr key={lead.id}>
                   <td>
                     <Link href={`/leads/${lead.id}`}>{lead.customerName}</Link>
@@ -516,22 +656,80 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
                       {lead.priority}
                     </span>
                   </td>
-                  <td>{lead.assignedBde.fullName}</td>
+                  <td>
+                    {canAssignLeads ? (
+                      <select
+                        aria-label={`BDE assigned to ${lead.customerName}`}
+                        value={lead.assignedBde.id}
+                        onChange={(event) =>
+                          void assignLead(lead, event.target.value)
+                        }
+                      >
+                        {assignees.map((assignee) => (
+                          <option key={assignee.id} value={assignee.id}>
+                            {assignee.fullName}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      lead.assignedBde.fullName
+                    )}
+                  </td>
                   <td>
                     {displayDate(lead.followUpAt)}
                     <small>{lead.nextAction}</small>
                   </td>
                   <td>{displayMoney(lead.estimatedBudget)}</td>
+                  {isAdmin && (
+                    <td>
+                      <button
+                        className="user-delete"
+                        type="button"
+                        disabled={deletingLeadId === lead.id}
+                        onClick={() => void deleteLead(lead)}
+                      >
+                        {deletingLeadId === lead.id ? "Deleting..." : "Delete"}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
-          {filtered.length === 0 && (
+          {!loading && !notice && filtered.length === 0 && (
             <div className="empty-list">
               No leads found. Add a lead to start tracking your pipeline.
             </div>
           )}
         </div>
+          {!loading && (
+            <nav className="pagination" aria-label="Leads pagination">
+            <span>
+              {filtered.length} {filtered.length === 1 ? "lead" : "leads"} ·
+              Page {page} of {totalPages}
+            </span>
+            <div className="pagination-controls">
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={page === 1}
+              >
+                Previous
+              </button>
+              <strong>{page} / {totalPages}</strong>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                disabled={page === totalPages}
+              >
+                Next
+              </button>
+            </div>
+            </nav>
+          )}
+        </>
       )}
 
       {showForm && (
@@ -562,6 +760,24 @@ export function LeadWorkspace({ view }: { view: "leads" | "pipeline" }) {
               </button>
             </div>
             <form onSubmit={createLead} className="lead-form">
+              {formError && (
+                <div className="workspace-notice form-wide" role="alert">
+                  {formError}
+                </div>
+              )}
+              {assignees.length === 0 && (
+                <div className="workspace-notice form-wide" role="status">
+                  No active BDE is available to assign this lead.
+                  {canAssignLeads && isAdmin ? (
+                    <>
+                      {" "}
+                      <Link href="/admin">Add or activate a BDE</Link> first.
+                    </>
+                  ) : (
+                    " Ask an administrator to add or activate a BDE."
+                  )}
+                </div>
+              )}
               <label>
                 Customer name *
                 <input

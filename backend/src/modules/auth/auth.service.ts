@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
 import { sign } from "jsonwebtoken";
+import { getJwtSecret } from "../../config/jwt.config";
 import { PrismaService } from "../../prisma/prisma.service";
 import { LoginDto } from "./dto/login.dto";
 @Injectable()
@@ -13,8 +14,13 @@ export class AuthService {
     if (!user || !(await bcrypt.compare(dto.password, user.passwordHash)))
       throw new UnauthorizedException("Invalid email or password");
     const accessToken = sign(
-      { sub: user.id, role: user.role, name: user.fullName },
-      process.env.JWT_SECRET || "development-secret",
+      {
+        sub: user.id,
+        role: user.role,
+        name: user.fullName,
+        tokenVersion: user.tokenVersion,
+      },
+      getJwtSecret(),
       { expiresIn: "8h" },
     );
     return {
@@ -26,6 +32,28 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  async currentUser(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId, isActive: true },
+      select: { id: true, fullName: true, email: true, role: true },
+    });
+    if (!user) throw new UnauthorizedException();
+    return {
+      id: user.id,
+      name: user.fullName,
+      email: user.email,
+      role: user.role,
+    };
+  }
+
+  async logout(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { tokenVersion: { increment: 1 } },
+    });
+    return { message: "Signed out" };
   }
 
   async changePassword(
@@ -44,7 +72,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash },
+      data: { passwordHash, tokenVersion: { increment: 1 } },
     });
     return { message: "Password updated" };
   }

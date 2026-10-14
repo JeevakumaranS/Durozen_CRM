@@ -31,10 +31,34 @@ export function setAuthUser(user: AuthUser): void {
 export function getAuthUser(): AuthUser | null {
   if (typeof window === "undefined") return null;
   const value = window.localStorage.getItem(AUTH_USER_KEY);
-  if (!value) return null;
-  try {
-    return JSON.parse(value) as AuthUser;
-  } catch {
-    return null;
+  if (value) {
+    try {
+      const user: unknown = JSON.parse(value);
+      if (
+        user &&
+        typeof user === "object" &&
+        "id" in user &&
+        "name" in user &&
+        "email" in user &&
+        "role" in user &&
+        typeof user.id === "string" &&
+        typeof user.name === "string" &&
+        typeof user.email === "string" &&
+        (user.role === "ADMIN" ||
+          user.role === "SALES_MANAGER" ||
+          user.role === "BDE")
+      ) {
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
+  return null;
 }

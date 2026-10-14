@@ -11,6 +11,7 @@ export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
   @Get("monthly-summary")
+  @Roles("ADMIN", "BDE", "SALES_MANAGER")
   monthlySummary(
     @Query("month") month: string,
     @CurrentUser() user: { sub: string; role: string },
@@ -19,7 +20,7 @@ export class ReportsController {
   }
 
   @Get(":type")
-  @Roles("ADMIN", "SALES_MANAGER")
+  @Roles("ADMIN", "BDE", "SALES_MANAGER")
   run(
     @Param("type") type: string,
     @Query("from") from: string | undefined,

@@ -24,6 +24,8 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
   useEffect(() => {
     apiClient<Customer[]>("/customers")
       .then(setCustomers)
@@ -33,7 +35,8 @@ export default function CustomersPage() {
             ? reason.message
             : "Unable to load customers.",
         ),
-      );
+      )
+      .finally(() => setLoading(false));
   }, []);
   const filtered = customers.filter((customer) =>
     [
@@ -43,7 +46,16 @@ export default function CustomersPage() {
       customer.assignedBde.fullName,
     ].some((value) => value?.toLowerCase().includes(query.toLowerCase())),
   );
-  return (
+    const pageSize = 10;
+    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    const visibleCustomers = filtered.slice(
+      (page - 1) * pageSize,
+      page * pageSize,
+    );
+    useEffect(() => {
+      if (page > totalPages) setPage(totalPages);
+    }, [page, totalPages]);
+    return (
     <main className="lead-workspace">
       <header className="workspace-header">
         <div>
@@ -69,7 +81,10 @@ export default function CustomersPage() {
             aria-label="Search customers"
             placeholder="Search name, company, mobile, BDE..."
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setPage(1);
+              setQuery(event.target.value);
+            }}
           />
         </label>
         <span className="result-count">{filtered.length} customers</span>
@@ -89,7 +104,7 @@ export default function CustomersPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((customer) => (
+            {visibleCustomers.map((customer) => (
               <tr key={customer.id}>
                 <td>
                   <Link href={`/leads/${customer.id}`}>
@@ -120,10 +135,38 @@ export default function CustomersPage() {
             ))}
           </tbody>
         </table>
-        {filtered.length === 0 && (
+        {loading && <div className="empty-list">Loading customers...</div>}
+        {!loading && !error && filtered.length === 0 && (
           <div className="empty-list">No won customers found.</div>
         )}
       </div>
+      {!loading && !error && (
+        <nav className="pagination" aria-label="Customers pagination">
+          <span>
+            {filtered.length} {filtered.length === 1 ? "customer" : "customers"} ·
+            Page {page} of {totalPages}
+          </span>
+          <div className="pagination-controls">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page === 1}
+            >
+              Previous
+            </button>
+            <strong>{page} / {totalPages}</strong>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={page === totalPages}
+            >
+              Next
+            </button>
+          </div>
+        </nav>
+      )}
     </main>
   );
 }

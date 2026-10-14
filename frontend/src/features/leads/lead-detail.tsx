@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { apiClient } from "../../lib/api-client";
 
@@ -70,7 +70,7 @@ export function LeadDetail() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       setLead(await apiClient<LeadDetails>(`/leads/${id}`));
       setNotice("");
@@ -79,11 +79,11 @@ export function LeadDetail() {
         error instanceof Error ? error.message : "Unable to load this lead.",
       );
     }
-  }
+  }, [id]);
 
   useEffect(() => {
     if (id) void load();
-  }, [id]);
+  }, [id, load]);
 
   async function addActivity(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -197,7 +197,7 @@ export function LeadDetail() {
                     <strong>
                       {activity.type === "STAGE_CHANGE"
                         ? "Stage updated"
-                        : activity.type}
+                        : activity.type.replaceAll("_", " ")}
                     </strong>
                     <time>{dateTime(activity.createdAt)}</time>
                   </div>

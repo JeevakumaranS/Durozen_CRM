@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -9,6 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
+import { Roles } from "../../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { LeadsService } from "./leads.service";
@@ -18,6 +20,7 @@ import { UpdateLeadDto } from "./dto/update-lead.dto";
 
 @Controller("leads")
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class LeadsController {
   constructor(private readonly leads: LeadsService) {}
 
@@ -42,10 +45,11 @@ export class LeadsController {
     @Body() dto: CreateLeadDto,
     @CurrentUser() user: { sub: string; role: string },
   ) {
-    if (user.role === "BDE") dto.assignedBdeId = user.sub;
-    return this.leads.create(dto, user.sub);
+    return this.leads.create(dto, user);
   }
-  @Post(":id/activities") addActivity(
+  @Post(":id/activities")
+  @Roles("ADMIN", "BDE")
+  addActivity(
     @Param("id") id: string,
     @Body() dto: CreateActivityDto,
     @CurrentUser() user: { sub: string; role: string },
@@ -58,5 +62,14 @@ export class LeadsController {
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.leads.update(id, dto, user);
+  }
+
+  @Delete(":id")
+  @Roles("ADMIN")
+  delete(
+    @Param("id") id: string,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.leads.delete(id, user);
   }
 }

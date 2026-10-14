@@ -1,25 +1,38 @@
-import { Injectable } from "@nestjs/common";
-import { LeadStage } from "@prisma/client";
+import { BadRequestException, Injectable } from "@nestjs/common";
+import { LeadStage, MeetingStatus } from "@prisma/client";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { PrismaService } from "../../prisma/prisma.service";
-
-type Actor = { sub: string; role: string };
 
 @Injectable()
 export class PerformanceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async summary(from?: string, to?: string, user?: Actor) {
+  async summary(from: string | undefined, to: string | undefined, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const start = from
       ? new Date(from)
       : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const end = to ? new Date(to) : new Date();
     end.setHours(23, 59, 59, 999);
+    if (
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime()) ||
+      start > end
+    ) {
+      throw new BadRequestException("Invalid performance date range");
+    }
     const range = { gte: start, lte: end };
+    const now = new Date();
+    const overdueEnd = end < now ? new Date(end.getTime() + 1) : now;
     const users = await this.prisma.user.findMany({
       where: {
         isActive: true,
         role: "BDE",
-        ...(user?.role === "BDE" ? { id: user.sub } : {}),
+        ...(user.role === "BDE"
+          ? { id: user.sub }
+          : user.role === "SALES_MANAGER"
+            ? { managerId: user.sub }
+            : {}),
       },
       select: { id: true, fullName: true },
       orderBy: { fullName: "asc" },
@@ -43,7 +56,11 @@ export class PerformanceService {
         select: { assignedBdeId: true, stage: true },
       }),
       this.prisma.meeting.findMany({
-        where: { meetingAt: range, lead: { assignedBdeId: { in: ids } } },
+        where: {
+          meetingAt: range,
+          status: { not: MeetingStatus.CANCELLED },
+          lead: { assignedBdeId: { in: ids } },
+        },
         select: { lead: { select: { assignedBdeId: true } } },
       }),
       this.prisma.proposal.findMany({
@@ -59,7 +76,10 @@ export class PerformanceService {
           lead: { assignedBdeId: { in: ids } },
           OR: [
             { status: "COMPLETED", updatedAt: range },
-            { status: "PENDING", dueAt: { lt: new Date() } },
+            {
+              status: "PENDING",
+              dueAt: { gte: start, lt: overdueEnd },
+            },
           ],
         },
         select: { status: true, lead: { select: { assignedBdeId: true } } },

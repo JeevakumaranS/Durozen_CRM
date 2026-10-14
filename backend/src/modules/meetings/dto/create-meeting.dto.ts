@@ -2,6 +2,7 @@ import {
   IsDateString,
   IsIn,
   IsNumber,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -24,6 +25,6 @@ export class CreateMeetingDto {
   @IsOptional() @IsNumber() @Min(0) budget?: number;
   @IsOptional() @IsString() discussionNotes?: string;
   @IsOptional() @IsString() customerConcerns?: string;
-  @IsString() nextAction!: string;
+  @IsString() @IsNotEmpty() nextAction!: string;
   @IsDateString() followUpAt!: string;
 }

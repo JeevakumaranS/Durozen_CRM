@@ -1,5 +1,8 @@
 node_modules/
 .next/
+.next-dev/
+.next-production/
 dist/
 .env
 *.log
+*.tsbuildinfo

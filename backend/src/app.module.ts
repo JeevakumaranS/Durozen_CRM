@@ -20,10 +20,18 @@ import { SettingsModule } from "./modules/settings/settings.module";
 import { NotificationsModule } from "./modules/notifications/notifications.module";
 import { JobsModule } from "./modules/jobs/jobs.module";
 import { AuditModule } from "./modules/audit/audit.module";
+import { AdminModule } from "./modules/admin/admin.module";
+import { validateEnvironment } from "./config/env.validation";
+import { GuardsModule } from "./common/guards/guards.module";
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ["../.env", ".env"] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ["../.env", ".env"],
+      validate: validateEnvironment,
+    }),
     PrismaModule,
+    GuardsModule,
     AuthModule,
     DashboardModule,
     LeadsModule,
@@ -43,6 +51,7 @@ import { AuditModule } from "./modules/audit/audit.module";
     NotificationsModule,
     JobsModule,
     AuditModule,
+    AdminModule,
   ],
 })
 export class AppModule {}

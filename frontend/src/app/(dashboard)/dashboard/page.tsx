@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api-client";
-import { clearAccessToken, getAuthUser } from "../../../lib/auth";
 
 type DashboardSummary = {
   metrics: {
@@ -43,10 +42,8 @@ const money = (value: string) =>
 export default function Dashboard() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState("");
-  const [userName, setUserName] = useState("Sales team");
 
   useEffect(() => {
-    setUserName(getAuthUser()?.name ?? "Sales team");
     apiClient<DashboardSummary>("/dashboard/summary")
       .then(setSummary)
       .catch((reason: unknown) =>
@@ -78,51 +75,7 @@ export default function Dashboard() {
   );
 
   return (
-    <main className="dashboard-shell">
-      <aside className="dashboard-sidebar">
-        <Link className="dashboard-brand" href="/dashboard">
-          <span>DUROZEN</span>
-          <small>CRM</small>
-        </Link>
-        <nav aria-label="Main navigation">
-          {[
-            ["Dashboard", "/dashboard"],
-            ["Leads", "/leads"],
-            ["Pipeline", "/pipeline"],
-            ["Follow-ups", "/follow-ups"],
-            ["Activities", "/activities"],
-            ["Meetings", "/meetings"],
-            ["Proposals", "/proposals"],
-            ["Negotiations", "/negotiations"],
-            ["Customers", "/customers"],
-            ["Performance", "/performance"],
-            ["Reports", "/reports"],
-          ].map(([label, href]) => (
-            <Link
-              className={href === "/dashboard" ? "selected" : ""}
-              href={href}
-              key={href}
-            >
-              {label}
-            </Link>
-          ))}
-        </nav>
-        <button
-          className="dashboard-user"
-          onClick={() => {
-            clearAccessToken();
-            window.location.assign("/login");
-          }}
-          title="Sign out"
-        >
-          <span>{userName.slice(0, 2).toUpperCase()}</span>
-          <div>
-            <strong>{userName}</strong>
-            <small>Sign out</small>
-          </div>
-        </button>
-      </aside>
-      <section className="dashboard-content">
+    <main className="dashboard-overview">
         <header className="dashboard-header">
           <div>
             <p className="eyebrow">SALES OVERVIEW</p>
@@ -131,7 +84,7 @@ export default function Dashboard() {
               A live view of team activity and sales movement.
             </p>
           </div>
-          <Link className="primary" href="/leads">
+          <Link className="primary" href="/leads/new">
             + Add lead
           </Link>
         </header>
@@ -251,7 +204,6 @@ export default function Dashboard() {
             </section>
           </>
         )}
-      </section>
     </main>
   );
 }

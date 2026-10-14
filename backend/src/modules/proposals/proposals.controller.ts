@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
+import { Roles } from "../../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { CreateProposalDto } from "./dto/create-proposal.dto";
@@ -16,6 +17,7 @@ import { ProposalsService } from "./proposals.service";
 
 @Controller("proposals")
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class ProposalsController {
   constructor(private readonly proposals: ProposalsService) {}
   @Get() list(@CurrentUser() user: { sub: string; role: string }) {

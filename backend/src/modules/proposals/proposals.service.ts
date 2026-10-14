@@ -1,17 +1,16 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { LeadStage } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateProposalDto } from "./dto/create-proposal.dto";
 import { UpdateProposalDto } from "./dto/update-proposal.dto";
-
-type Actor = { sub: string; role: string };
 
 @Injectable()
 export class ProposalsService {
@@ -21,9 +20,10 @@ export class ProposalsService {
   ) {}
 
   list(user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     return this.prisma.proposal.findMany({
       where:
-        user.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : undefined,
+        user.role === "ADMIN" ? undefined : { lead: leadScope(user) },
       include: {
         lead: { include: { assignedBde: { select: { fullName: true } } } },
       },
@@ -32,16 +32,16 @@ export class ProposalsService {
   }
 
   async create(dto: CreateProposalDto, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     if ((dto.discount ?? 0) > dto.proposalAmount)
       throw new BadRequestException("Discount cannot exceed proposal amount");
-    const lead = await this.prisma.lead.findUnique({
-      where: { id: dto.leadId },
+    const lead = await this.prisma.lead.findFirst({
+      where: {
+        id: dto.leadId,
+        ...leadScope(user),
+      },
     });
     if (!lead) throw new NotFoundException("Lead not found");
-    if (user.role === "BDE" && lead.assignedBdeId !== user.sub)
-      throw new ForbiddenException(
-        "BDE users can only create proposals for their assigned leads",
-      );
     if (lead.stage === LeadStage.WON || lead.stage === LeadStage.LOST)
       throw new BadRequestException("Closed leads cannot receive proposals");
     if (lead.stage !== LeadStage.PROPOSAL)
@@ -107,15 +107,15 @@ export class ProposalsService {
   }
 
   async update(id: string, dto: UpdateProposalDto, user: Actor) {
-    const proposal = await this.prisma.proposal.findUnique({
-      where: { id },
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const proposal = await this.prisma.proposal.findFirst({
+      where: {
+        id,
+        ...(user.role === "ADMIN" ? {} : { lead: leadScope(user) }),
+      },
       include: { lead: true },
     });
     if (!proposal) throw new NotFoundException("Proposal not found");
-    if (user.role === "BDE" && proposal.lead.assignedBdeId !== user.sub)
-      throw new ForbiddenException(
-        "BDE users can only update their assigned proposals",
-      );
     return this.prisma.$transaction(async (tx) => {
       if (dto.followUpAt || dto.nextAction) {
         const nextAction =

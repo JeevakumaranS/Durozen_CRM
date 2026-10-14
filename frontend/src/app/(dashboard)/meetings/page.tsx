@@ -1,5 +1,5 @@
-import { SalesRecordWorkspace } from "../../../features/sales/sales-record-workspace";
+import { MeetingWorkspace } from "../../../features/meetings/meeting-workspace";
 
 export default function MeetingsPage() {
-  return <SalesRecordWorkspace kind="meetings" />;
+  return <MeetingWorkspace />;
 }

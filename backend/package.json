@@ -2,12 +2,16 @@
   "name": "@durozen/api",
   "private": true,
   "scripts": {
+    "prestart:dev": "npm run prisma:generate",
     "start:dev": "nest start --watch",
+    "prebuild": "npm run prisma:generate",
     "build": "nest build",
+    "prestart": "npm run prisma:generate",
     "start": "node dist/main",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:seed": "prisma db seed"
+    "prisma:seed": "prisma db seed",
+    "admin:create": "ts-node prisma/create-admin.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -23,7 +27,6 @@
     "bcrypt": "^5.1.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "durozen-crm": "file:..",
     "exceljs": "^4.4.0",
     "pdfkit": "^0.20.2",
     "reflect-metadata": "^0.2.2",

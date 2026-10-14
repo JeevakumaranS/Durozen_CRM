@@ -1,15 +1,13 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
 import { LeadStage } from "@prisma/client";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateNegotiationDto } from "./dto/create-negotiation.dto";
-
-type Actor = { sub: string; role: string };
 
 @Injectable()
 export class NegotiationsService {
@@ -19,6 +17,7 @@ export class NegotiationsService {
   ) {}
 
   list(user: Actor) {
+    assertActorRole(user, ["ADMIN"]);
     return this.prisma.negotiation.findMany({
       where:
         user.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : undefined,
@@ -30,14 +29,14 @@ export class NegotiationsService {
   }
 
   async create(dto: CreateNegotiationDto, user: Actor) {
-    const lead = await this.prisma.lead.findUnique({
-      where: { id: dto.leadId },
+    assertActorRole(user, ["ADMIN"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: {
+        id: dto.leadId,
+        ...(user.role === "BDE" ? { assignedBdeId: user.sub } : {}),
+      },
     });
     if (!lead) throw new NotFoundException("Lead not found");
-    if (user.role === "BDE" && lead.assignedBdeId !== user.sub)
-      throw new ForbiddenException(
-        "BDE users can only negotiate their assigned leads",
-      );
     if (lead.stage === LeadStage.WON || lead.stage === LeadStage.LOST)
       throw new BadRequestException("Closed leads cannot enter negotiation");
     if (lead.stage !== LeadStage.NEGOTIATION)

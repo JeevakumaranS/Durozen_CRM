@@ -234,16 +234,21 @@ export function PerformanceWorkspace() {
   const [to, setTo] = useState(localDate(today));
   const [rows, setRows] = useState<BdeMetrics[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
+    setLoading(true);
+    setError("");
     apiClient<{ bdes: BdeMetrics[] }>(`/performance?from=${from}&to=${to}`)
       .then((result) => setRows(result.bdes))
-      .catch((reason: unknown) =>
+      .catch((reason: unknown) => {
+        setRows([]);
         setError(
           reason instanceof Error
             ? reason.message
             : "Unable to load performance.",
-        ),
-      );
+        );
+      })
+      .finally(() => setLoading(false));
   }, [from, to]);
   return (
     <main className="lead-workspace report-workspace">
@@ -280,6 +285,9 @@ export function PerformanceWorkspace() {
         </div>
       )}
       <div className="lead-table-wrap">
+        {loading && (
+          <p className="dashboard-loading">Loading BDE performance...</p>
+        )}
         <table className="lead-table performance-table">
           <thead>
             <tr>
@@ -316,13 +324,12 @@ export function PerformanceWorkspace() {
             ))}
           </tbody>
         </table>
-        {rows.length === 0 && (
+        {!loading && !error && rows.length === 0 && (
           <div className="empty-list">No BDE performance for this period.</div>
         )}
       </div>
       <div className="report-shortcuts">
         <Link href="/reports">Open reports</Link>
-        <Link href="/monthly-summary">Monthly summary</Link>
       </div>
     </main>
   );
@@ -334,25 +341,30 @@ export function ReportsWorkspace() {
   const [to, setTo] = useState("");
   const [rows, setRows] = useState<ReportRow[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const user = getAuthUser();
   const restricted = user?.role === "BDE";
 
   useEffect(() => {
     if (restricted) return;
+    setLoading(true);
+    setError("");
     const query = new URLSearchParams({
       ...(from ? { from } : {}),
       ...(to ? { to } : {}),
     });
     apiClient<ReportRow[]>(`/reports/${type}?${query}`)
       .then(setRows)
-      .catch((reason: unknown) =>
+      .catch((reason: unknown) => {
+        setRows([]);
         setError(
           reason instanceof Error
             ? reason.message
             : "Unable to load this report.",
-        ),
-      );
+        );
+      })
+      .finally(() => setLoading(false));
   }, [type, from, to, restricted]);
 
   async function exportFile(format: "pdf" | "xlsx") {
@@ -441,6 +453,9 @@ export function ReportsWorkspace() {
               {error}
             </div>
           )}
+          {loading && (
+            <p className="dashboard-loading">Loading report data...</p>
+          )}
           <div className="lead-table-wrap report-table-wrap">
             <table className="lead-table">
               <thead>
@@ -464,7 +479,7 @@ export function ReportsWorkspace() {
                 ))}
               </tbody>
             </table>
-            {rows.length === 0 && (
+            {!loading && !error && rows.length === 0 && (
               <div className="empty-list">
                 No records for this report and date range.
               </div>

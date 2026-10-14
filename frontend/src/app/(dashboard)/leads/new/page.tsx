@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { LeadWorkspace } from "../../../../features/leads/lead-workspace";
 
 export default function NewLeadPage() {
-  redirect("/leads");
+  return <LeadWorkspace view="leads" initialShowForm />;
 }

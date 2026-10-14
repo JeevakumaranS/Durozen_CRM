@@ -4,11 +4,16 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { Injectable } from "@nestjs/common";
+import { JwtPayload } from "jsonwebtoken";
 import { verify } from "jsonwebtoken";
+import { getJwtSecret } from "../../config/jwt.config";
+import { PrismaService } from "../../prisma/prisma.service";
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const authorization = request.headers.authorization;
     const token = authorization?.startsWith("Bearer ")
@@ -17,14 +22,44 @@ export class JwtAuthGuard implements CanActivate {
 
     if (!token) throw new UnauthorizedException();
 
+    let claims: JwtPayload | string;
     try {
-      request.user = verify(
-        token,
-        process.env.JWT_SECRET || "development-secret",
-      );
-      return true;
+      claims = verify(token, getJwtSecret());
     } catch {
       throw new UnauthorizedException();
     }
+
+    if (
+      typeof claims === "string" ||
+      typeof claims.sub !== "string" ||
+      typeof claims.tokenVersion !== "number"
+    ) {
+      throw new UnauthorizedException();
+    }
+    const user = await this.prisma.user.findUnique({
+      where: { id: claims.sub },
+      select: {
+        id: true,
+        role: true,
+        fullName: true,
+        email: true,
+        isActive: true,
+        tokenVersion: true,
+      },
+    });
+    if (
+      !user?.isActive ||
+      user.tokenVersion !== claims.tokenVersion
+    ) {
+      throw new UnauthorizedException();
+    }
+
+    request.user = {
+      sub: user.id,
+      role: user.role,
+      name: user.fullName,
+      email: user.email,
+    };
+    return true;
   }
 }

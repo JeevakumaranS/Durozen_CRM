@@ -31,6 +31,11 @@ enum FollowUpStatus {
  RESCHEDULED
  CANCELLED
 }
+enum MeetingStatus {
+ SCHEDULED
+ COMPLETED
+ CANCELLED
+}
 model User {
  id String @id @default(uuid())
  fullName String @map("full_name")
@@ -38,10 +43,15 @@ model User {
  passwordHash String @map("password_hash")
  role UserRole @default(BDE)
  isActive Boolean @default(true) @map("is_active")
+ tokenVersion Int @default(0) @map("token_version")
+ managerId String? @map("manager_id")
+ manager User? @relation("ManagerBdes", fields: [managerId], references: [id], onDelete: SetNull)
+ managedBdes User[] @relation("ManagerBdes")
  leads Lead[] @relation("AssignedBde")
  activities Activity[] @relation("ActivityUser")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
+ @@index([managerId])
  @@map("users")
 }
 model Lead {
@@ -84,6 +94,8 @@ model Activity {
  id String @id @default(uuid())
  leadId String @map("lead_id")
  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ meetingId String? @map("meeting_id")
+ meeting Meeting? @relation(fields: [meetingId], references: [id], onDelete: SetNull)
  userId String? @map("user_id")
  user User? @relation("ActivityUser", fields: [userId], references: [id], onDelete: SetNull)
  type String
@@ -94,12 +106,15 @@ model Activity {
  newStage LeadStage? @map("new_stage")
  createdAt DateTime @default(now()) @map("created_at")
  @@index([leadId, createdAt])
+ @@index([meetingId, createdAt])
  @@map("activities")
 }
 model FollowUp {
  id String @id @default(uuid())
  leadId String @map("lead_id")
  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ meetingId String? @map("meeting_id")
+ meeting Meeting? @relation(fields: [meetingId], references: [id], onDelete: SetNull)
  dueAt DateTime @map("due_at")
  type String
  nextAction String @map("next_action")
@@ -108,6 +123,7 @@ model FollowUp {
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
  @@index([status, dueAt])
+ @@index([meetingId, status])
  @@map("follow_ups")
 }
 model Proposal {
@@ -136,6 +152,8 @@ model Meeting {
  leadId String @map("lead_id")
  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
  meetingAt DateTime @map("meeting_at")
+ status MeetingStatus @default(SCHEDULED)
+ completedAt DateTime? @map("completed_at")
  type String
  participants String?
  requirement String?
@@ -146,6 +164,8 @@ model Meeting {
  followUpAt DateTime @map("follow_up_at")
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
+ activities Activity[]
+ followUps FollowUp[]
  @@index([meetingAt])
  @@index([leadId, meetingAt])
  @@map("meetings")

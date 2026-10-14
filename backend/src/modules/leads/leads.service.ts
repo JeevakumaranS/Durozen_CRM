@@ -6,12 +6,14 @@ import {
 } from "@nestjs/common";
 import { LeadPriority, LeadStage as PrismaLeadStage } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
-import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateLeadDto, LeadStage } from "./dto/create-lead.dto";
 import { CreateActivityDto } from "./dto/create-activity.dto";
 import { UpdateLeadDto } from "./dto/update-lead.dto";
 import { enforceNextAction } from "./rules/next-action.rule";
+import { StageTransitionService } from "../pipeline/stage-transition.service";
 
 @Injectable()
 export class LeadsService {
@@ -20,20 +22,25 @@ export class LeadsService {
     private readonly transitions: StageTransitionService,
   ) {}
 
-  list(stage?: LeadStage, user?: { sub: string; role: string }) {
+  list(stage: LeadStage | undefined, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     return this.prisma.lead.findMany({
       where: {
         ...(stage ? { stage: stage as PrismaLeadStage } : {}),
-        ...(user?.role === "BDE" ? { assignedBdeId: user.sub } : {}),
+        ...leadScope(user),
       },
       include: { assignedBde: { select: { id: true, fullName: true } } },
       orderBy: [{ followUpAt: "asc" }, { createdAt: "desc" }],
     });
   }
 
-  async get(id: string, user?: { sub: string; role: string }) {
-    const lead = await this.prisma.lead.findUnique({
-      where: { id },
+  async get(id: string, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: {
+        id,
+        ...leadScope(user),
+      },
       include: {
         assignedBde: { select: { id: true, fullName: true } },
         activities: {
@@ -43,19 +50,33 @@ export class LeadsService {
       },
     });
     if (!lead) throw new NotFoundException("Lead not found");
-    if (user?.role === "BDE" && lead.assignedBdeId !== user.sub) {
-      throw new ForbiddenException(
-        "BDE users can only view their assigned leads",
-      );
-    }
     return lead;
   }
 
-  assignees(user?: { sub: string; role: string }) {
+  async delete(id: string, user: Actor) {
+    assertActorRole(user, ["ADMIN"]);
+    const lead = await this.prisma.lead.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!lead) throw new NotFoundException("Lead not found");
+    await this.prisma.lead.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
+  assignees(user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     return this.prisma.user.findMany({
       where: {
         isActive: true,
-        ...(user?.role === "BDE" ? { id: user.sub } : { role: "BDE" }),
+        ...(user.role === "BDE"
+          ? { id: user.sub }
+          : {
+              role: "BDE",
+              ...(user.role === "SALES_MANAGER"
+                ? { managerId: user.sub }
+                : {}),
+            }),
       },
       select: { id: true, fullName: true, role: true },
       orderBy: { fullName: "asc" },
@@ -65,20 +86,21 @@ export class LeadsService {
   async addActivity(
     id: string,
     dto: CreateActivityDto,
-    user?: { sub: string; role: string },
+    user: Actor,
   ) {
-    const lead = await this.prisma.lead.findUnique({ where: { id } });
+    assertActorRole(user, ["ADMIN", "BDE"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: {
+        id,
+        ...leadScope(user),
+      },
+    });
     if (!lead) throw new NotFoundException("Lead not found");
-    if (user?.role === "BDE" && lead.assignedBdeId !== user.sub) {
-      throw new ForbiddenException(
-        "BDE users can only update their assigned leads",
-      );
-    }
     return this.prisma.$transaction(async (tx) => {
       const activity = await tx.activity.create({
         data: {
           leadId: id,
-          userId: user?.sub ?? lead.assignedBdeId,
+          userId: user.sub,
           type: dto.type,
           description: dto.description,
           outcome: dto.outcome,
@@ -122,11 +144,19 @@ export class LeadsService {
     });
   }
 
-  async create(dto: CreateLeadDto, actorId = dto.assignedBdeId) {
+  async create(dto: CreateLeadDto, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const assignedBdeId =
+      user.role === "BDE" ? user.sub : dto.assignedBdeId;
     const stage = LeadStage.NEW_LEAD as PrismaLeadStage;
     enforceNextAction(stage, dto.nextAction, new Date(dto.followUpAt));
     const bde = await this.prisma.user.findFirst({
-      where: { id: dto.assignedBdeId, isActive: true },
+      where: {
+        id: assignedBdeId,
+        isActive: true,
+        role: "BDE",
+        ...(user.role === "SALES_MANAGER" ? { managerId: user.sub } : {}),
+      },
     });
     if (!bde) throw new BadRequestException("Assigned BDE does not exist");
     const duplicate = await this.prisma.lead.findFirst({
@@ -152,7 +182,7 @@ export class LeadsService {
         leadSource: dto.leadSource,
         priority: (dto.priority ?? "WARM") as LeadPriority,
         estimatedBudget: dto.estimatedBudget,
-        assignedBdeId: dto.assignedBdeId,
+        assignedBdeId,
         stage,
         nextAction: dto.nextAction,
         followUpAt: new Date(dto.followUpAt),
@@ -161,7 +191,7 @@ export class LeadsService {
           create: {
             type: "NOTE",
             description: "Lead created",
-            userId: actorId,
+            userId: user.sub,
             newStage: stage,
           },
         },
@@ -180,26 +210,41 @@ export class LeadsService {
   async update(
     id: string,
     dto: UpdateLeadDto,
-    user?: { sub: string; role: string },
+    user: Actor,
   ) {
-    const existing = await this.prisma.lead.findUnique({ where: { id } });
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const existing = await this.prisma.lead.findFirst({
+      where: {
+        id,
+        ...leadScope(user),
+      },
+    });
     if (!existing) throw new NotFoundException("Lead not found");
-    if (user?.role === "BDE" && existing.assignedBdeId !== user.sub) {
-      throw new ForbiddenException(
-        "BDE users can only update their assigned leads",
-      );
-    }
     if (
-      user?.role === "BDE" &&
+      user.role === "BDE" &&
       dto.assignedBdeId &&
       dto.assignedBdeId !== user.sub
     ) {
       throw new ForbiddenException("BDE users cannot reassign leads");
     }
+    if (user.role === "SALES_MANAGER" && dto.assignedBdeId) {
+      const teamBde = await this.prisma.user.findFirst({
+        where: {
+          id: dto.assignedBdeId,
+          role: "BDE",
+          isActive: true,
+          managerId: user.sub,
+        },
+        select: { id: true },
+      });
+      if (!teamBde) {
+        throw new ForbiddenException(
+          "Sales Managers can only assign leads to their own BDE team",
+        );
+      }
+    }
 
     const nextStage = (dto.stage ?? existing.stage) as PrismaLeadStage;
-    if (dto.stage && nextStage !== existing.stage)
-      this.transitions.assertAllowed(existing.stage, nextStage);
     const nextAction = dto.nextAction ?? existing.nextAction ?? undefined;
     const followUpAt = dto.followUpAt
       ? new Date(dto.followUpAt)
@@ -207,7 +252,14 @@ export class LeadsService {
     enforceNextAction(nextStage, nextAction, followUpAt);
     if (dto.assignedBdeId) {
       const assignee = await this.prisma.user.findFirst({
-        where: { id: dto.assignedBdeId, isActive: true },
+        where: {
+          id: dto.assignedBdeId,
+          isActive: true,
+          role: "BDE",
+          ...(user.role === "SALES_MANAGER"
+            ? { managerId: user.sub }
+            : {}),
+        },
       });
       if (!assignee)
         throw new BadRequestException("Assigned BDE does not exist");
@@ -246,6 +298,14 @@ export class LeadsService {
     }
 
     const stageChanged = nextStage !== existing.stage;
+    if (stageChanged) {
+      this.transitions.assertAllowed(existing.stage, nextStage);
+    }
+    const followUpChanged =
+      (dto.followUpAt !== undefined &&
+        new Date(dto.followUpAt).getTime() !==
+          existing.followUpAt?.getTime()) ||
+      (dto.nextAction !== undefined && dto.nextAction !== existing.nextAction);
     return this.prisma.lead.update({
       where: { id },
       data: {
@@ -278,7 +338,7 @@ export class LeadsService {
                 type: "STAGE_CHANGE",
                 description: `Stage changed from ${existing.stage} to ${nextStage}`,
                 userId:
-                  user?.sub ?? dto.assignedBdeId ?? existing.assignedBdeId,
+                  user.sub,
                 previousStage: existing.stage,
                 newStage: nextStage,
               },
@@ -292,7 +352,7 @@ export class LeadsService {
                   data: { status: "CANCELLED" },
                 },
               }
-            : dto.followUpAt || dto.nextAction
+            : followUpChanged
               ? {
                   create: {
                     dueAt: dto.followUpAt

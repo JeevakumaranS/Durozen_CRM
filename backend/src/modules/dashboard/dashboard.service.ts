@@ -1,13 +1,16 @@
 import { Injectable } from "@nestjs/common";
-import { LeadStage } from "@prisma/client";
+import { LeadStage, MeetingStatus, Prisma } from "@prisma/client";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async summary(user?: { sub: string; role: string }) {
-    const assignedBdeId = user?.role === "BDE" ? user.sub : undefined;
+  async summary(user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const scope = leadScope(user);
     const now = new Date();
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
@@ -33,37 +36,38 @@ export class DashboardService {
     ] = await Promise.all([
       this.prisma.lead.groupBy({
         by: ["stage"],
-        where: assignedBdeId ? { assignedBdeId } : undefined,
+        where: scope,
         _count: { _all: true },
         _sum: { estimatedBudget: true },
       }),
-      this.prisma.lead.count({
+      this.prisma.followUp.count({
         where: {
-          stage: { notIn: [LeadStage.WON, LeadStage.LOST] },
-          followUpAt: { gte: todayStart, lt: tomorrow },
-          ...(assignedBdeId ? { assignedBdeId } : {}),
+          status: "PENDING",
+          dueAt: { gte: todayStart, lt: tomorrow },
+          lead: scope,
         },
       }),
-      this.prisma.lead.count({
+      this.prisma.followUp.count({
         where: {
-          stage: { notIn: [LeadStage.WON, LeadStage.LOST] },
-          followUpAt: { lt: todayStart },
-          ...(assignedBdeId ? { assignedBdeId } : {}),
+          status: "PENDING",
+          dueAt: { lt: todayStart },
+          lead: scope,
         },
       }),
       this.prisma.meeting.count({
         where: {
           meetingAt: { gte: todayStart, lt: tomorrow },
-          ...(assignedBdeId ? { lead: { assignedBdeId } } : {}),
+          status: { not: MeetingStatus.CANCELLED },
+          lead: scope,
         },
       }),
-      this.wonRevenue(todayStart, tomorrow, assignedBdeId),
-      this.wonRevenue(weekStart, tomorrow, assignedBdeId),
-      this.wonRevenue(monthStart, tomorrow, assignedBdeId),
+      this.wonRevenue(todayStart, tomorrow, scope),
+      this.wonRevenue(weekStart, tomorrow, scope),
+      this.wonRevenue(monthStart, tomorrow, scope),
       this.prisma.lead.aggregate({
         where: {
           stage: { notIn: [LeadStage.WON, LeadStage.LOST] },
-          ...(assignedBdeId ? { assignedBdeId } : {}),
+          ...scope,
         },
         _sum: { estimatedBudget: true },
       }),
@@ -98,12 +102,16 @@ export class DashboardService {
     };
   }
 
-  private async wonRevenue(start: Date, end: Date, assignedBdeId?: string) {
+  private async wonRevenue(
+    start: Date,
+    end: Date,
+    scope: Prisma.LeadWhereInput,
+  ) {
     const result = await this.prisma.lead.aggregate({
       where: {
         stage: LeadStage.WON,
         stageEnteredAt: { gte: start, lt: end },
-        ...(assignedBdeId ? { assignedBdeId } : {}),
+        ...scope,
       },
       _sum: { finalDealValue: true },
     });

@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { PrismaService } from "../../prisma/prisma.service";
 
 @Injectable()
@@ -7,11 +8,15 @@ export class ActivitiesService {
   constructor(private readonly prisma: PrismaService) {}
 
   list(
-    type?: string,
-    from?: string,
-    to?: string,
-    user?: { sub: string; role: string },
+    type: string | undefined,
+    from: string | undefined,
+    to: string | undefined,
+    search: string | undefined,
+    page: number,
+    pageSize: number,
+    user: Actor,
   ) {
+    assertActorRole(user, ["ADMIN", "BDE"]);
     const start = from ? new Date(from) : undefined;
     const end = to ? new Date(to) : undefined;
     const where: Prisma.ActivityWhereInput = {
@@ -24,24 +29,54 @@ export class ActivitiesService {
             },
           }
         : {}),
-      ...(user?.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : {}),
+      ...(user.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : {}),
+      ...(search
+        ? {
+            OR: [
+              { description: { contains: search, mode: "insensitive" } },
+              { outcome: { contains: search, mode: "insensitive" } },
+              { user: { is: { fullName: { contains: search, mode: "insensitive" } } } },
+              {
+                lead: {
+                  is: {
+                    OR: [
+                      { customerName: { contains: search, mode: "insensitive" } },
+                      { businessName: { contains: search, mode: "insensitive" } },
+                      { assignedBde: { fullName: { contains: search, mode: "insensitive" } } },
+                    ],
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
     };
-    return this.prisma.activity.findMany({
-      where,
-      include: {
-        user: { select: { id: true, fullName: true } },
-        lead: {
-          select: {
-            id: true,
-            customerName: true,
-            businessName: true,
-            stage: true,
-            assignedBde: { select: { fullName: true } },
+    return this.prisma.$transaction([
+      this.prisma.activity.findMany({
+        where,
+        include: {
+          user: { select: { id: true, fullName: true } },
+          lead: {
+            select: {
+              id: true,
+              customerName: true,
+              businessName: true,
+              stage: true,
+              assignedBde: { select: { fullName: true } },
+            },
           },
         },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-    });
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.activity.count({ where }),
+    ]).then(([items, total]) => ({
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    }));
   }
 }

@@ -1,9 +1,13 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
-import { LeadStage, Prisma } from "@prisma/client";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from "@nestjs/common";
+import { LeadStage, MeetingStatus, Prisma } from "@prisma/client";
+import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { PerformanceService } from "../performance/performance.service";
-
-type Actor = { sub: string; role: string };
 
 @Injectable()
 export class ReportsService {
@@ -12,16 +16,30 @@ export class ReportsService {
     private readonly performance: PerformanceService,
   ) {}
 
-  async run(type: string, from?: string, to?: string, user?: Actor) {
+  async run(
+    type: string,
+    from: string | undefined,
+    to: string | undefined,
+    user: Actor,
+  ) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    if (
+      user.role === "BDE" &&
+      !["bde-performance", "monthly-summary"].includes(type)
+    ) {
+      throw new ForbiddenException(
+        "BDE users can only access their personal performance reports",
+      );
+    }
     const range = this.range(from, to);
-    const owner = user?.role === "BDE" ? user.sub : undefined;
+    const scope = leadScope(user);
     const leadWhere: Prisma.LeadWhereInput = {
       ...(range ? { createdAt: range } : {}),
-      ...(owner ? { assignedBdeId: owner } : {}),
+      ...scope,
     };
     const stageDateWhere: Prisma.LeadWhereInput = {
       ...(range ? { stageEnteredAt: range } : {}),
-      ...(owner ? { assignedBdeId: owner } : {}),
+      ...scope,
     };
     const leadInclude = {
       assignedBde: { select: { fullName: true } },
@@ -53,7 +71,7 @@ export class ReportsService {
         return this.prisma.followUp.findMany({
           where: {
             ...(range ? { dueAt: range } : {}),
-            ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+            lead: scope,
           },
           include: { lead: { include: leadInclude } },
           orderBy: { dueAt: "asc" },
@@ -62,7 +80,7 @@ export class ReportsService {
         return this.prisma.proposal.findMany({
           where: {
             ...(range ? { proposalDate: range } : {}),
-            ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+            lead: scope,
           },
           include: { lead: { include: leadInclude } },
           orderBy: { proposalDate: "desc" },
@@ -71,7 +89,7 @@ export class ReportsService {
         return this.prisma.meeting.findMany({
           where: {
             ...(range ? { meetingAt: range } : {}),
-            ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+            lead: scope,
           },
           include: { lead: { include: leadInclude } },
           orderBy: { meetingAt: "desc" },
@@ -80,7 +98,7 @@ export class ReportsService {
         return this.prisma.negotiation.findMany({
           where: {
             ...(range ? { createdAt: range } : {}),
-            ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+            lead: scope,
           },
           include: { lead: { include: leadInclude } },
           orderBy: { createdAt: "desc" },
@@ -111,17 +129,18 @@ export class ReportsService {
     }
   }
 
-  async monthlySummary(month: string, user?: Actor) {
+  async monthlySummary(month: string, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     if (!/^\d{4}-\d{2}$/.test(month))
       throw new BadRequestException("Month must use YYYY-MM format");
     const [year, monthIndex] = month.split("-").map(Number);
     const start = new Date(year, monthIndex - 1, 1);
     const end = new Date(year, monthIndex, 1);
-    const owner = user?.role === "BDE" ? user.sub : undefined;
+    const scope = leadScope(user);
     const activityWhere: Prisma.ActivityWhereInput = {
       createdAt: { gte: start, lt: end },
       newStage: { not: null },
-      ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+      lead: scope,
     };
     const [
       leads,
@@ -136,7 +155,7 @@ export class ReportsService {
       this.prisma.lead.count({
         where: {
           createdAt: { gte: start, lt: end },
-          ...(owner ? { assignedBdeId: owner } : {}),
+          ...scope,
         },
       }),
       this.prisma.activity.findMany({
@@ -146,40 +165,41 @@ export class ReportsService {
       this.prisma.meeting.count({
         where: {
           meetingAt: { gte: start, lt: end },
-          ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+          status: { not: MeetingStatus.CANCELLED },
+          lead: scope,
         },
       }),
       this.prisma.proposal.count({
         where: {
           proposalDate: { gte: start, lt: end },
-          ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+          lead: scope,
         },
       }),
       this.prisma.negotiation.count({
         where: {
           createdAt: { gte: start, lt: end },
-          ...(owner ? { lead: { assignedBdeId: owner } } : {}),
+          lead: scope,
         },
       }),
       this.prisma.lead.count({
         where: {
           stage: LeadStage.WON,
           stageEnteredAt: { gte: start, lt: end },
-          ...(owner ? { assignedBdeId: owner } : {}),
+          ...scope,
         },
       }),
       this.prisma.lead.count({
         where: {
           stage: LeadStage.LOST,
           stageEnteredAt: { gte: start, lt: end },
-          ...(owner ? { assignedBdeId: owner } : {}),
+          ...scope,
         },
       }),
       this.prisma.lead.aggregate({
         where: {
           stage: LeadStage.WON,
           stageEnteredAt: { gte: start, lt: end },
-          ...(owner ? { assignedBdeId: owner } : {}),
+          ...scope,
         },
         _sum: { finalDealValue: true },
       }),
