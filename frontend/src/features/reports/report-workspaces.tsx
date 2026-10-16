@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient } from "../../lib/api-client";
+import { notify } from "../../lib/notifications";
 import { getAccessToken, getAuthUser } from "../../lib/auth";
 
 type MonthlySummary = {
@@ -37,7 +38,7 @@ type ReportRow = Record<string, unknown>;
 
 const reportTypes = [
   ["leads", "Lead report"],
-  ["pipeline", "Pipeline report"],
+  ["pipeline", "Sales Pipeline report"],
   ["follow-ups", "Follow-up report"],
   ["proposals", "Proposal report"],
   ["meetings", "Meeting report"],
@@ -110,13 +111,14 @@ export function MonthlySummaryWorkspace() {
   useEffect(() => {
     apiClient<MonthlySummary>(`/reports/monthly-summary?month=${month}`)
       .then(setData)
-      .catch((reason: unknown) =>
-        setError(
+      .catch((reason: unknown) => {
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load monthly summary.",
-        ),
-      );
+            : "Unable to load monthly summary.";
+        setError(message);
+        notify(message, "error");
+      });
   }, [month]);
   async function exportSummary(format: "pdf" | "xlsx") {
     setExporting(true);
@@ -132,11 +134,12 @@ export function MonthlySummaryWorkspace() {
         localDate(nextMonth),
       );
     } catch (reason) {
-      setError(
+      const message =
         reason instanceof Error
           ? reason.message
-          : "Unable to export monthly summary.",
-      );
+          : "Unable to export monthly summary.";
+      setError(message);
+      notify(message, "error");
     } finally {
       setExporting(false);
     }
@@ -190,11 +193,6 @@ export function MonthlySummaryWorkspace() {
           </div>
         )}
       </header>
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      )}
       {!data && !error && (
         <p className="dashboard-loading">Loading monthly summary...</p>
       )}
@@ -242,11 +240,12 @@ export function PerformanceWorkspace() {
       .then((result) => setRows(result.bdes))
       .catch((reason: unknown) => {
         setRows([]);
-        setError(
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load performance.",
-        );
+            : "Unable to load performance.";
+        setError(message);
+        notify(message, "error");
       })
       .finally(() => setLoading(false));
   }, [from, to]);
@@ -279,11 +278,6 @@ export function PerformanceWorkspace() {
           </label>
         </div>
       </header>
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      )}
       <div className="lead-table-wrap">
         {loading && (
           <p className="dashboard-loading">Loading BDE performance...</p>
@@ -358,11 +352,12 @@ export function ReportsWorkspace() {
       .then(setRows)
       .catch((reason: unknown) => {
         setRows([]);
-        setError(
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load this report.",
-        );
+            : "Unable to load this report.";
+        setError(message);
+        notify(message, "error");
       })
       .finally(() => setLoading(false));
   }, [type, from, to, restricted]);
@@ -373,9 +368,10 @@ export function ReportsWorkspace() {
     try {
       await downloadReport(type, format, from, to);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to export report.",
-      );
+      const message =
+        reason instanceof Error ? reason.message : "Unable to export report.";
+      setError(message);
+      notify(message, "error");
     } finally {
       setBusy(false);
     }
@@ -448,11 +444,6 @@ export function ReportsWorkspace() {
               <button onClick={() => window.print()}>Print</button>
             </div>
           </div>
-          {error && (
-            <div className="workspace-notice" role="alert">
-              {error}
-            </div>
-          )}
           {loading && (
             <p className="dashboard-loading">Loading report data...</p>
           )}

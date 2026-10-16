@@ -13,16 +13,7 @@ export class CreateFollowUpDto {
   @IsDateString()
   dueAt!: string;
 
-  @IsIn([
-    "Call",
-    "WhatsApp",
-    "Meeting",
-    "Demo",
-    "Email",
-    "Proposal Follow-up",
-    "Negotiation",
-    "Other",
-  ])
+  @IsIn(["Proposal Follow-up", "Negotiation"])
   type!: string;
 
   @IsString()

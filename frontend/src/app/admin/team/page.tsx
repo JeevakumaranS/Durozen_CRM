@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { ApiError, apiClient } from "../../../lib/api-client";
 import { getAccessToken } from "../../../lib/auth";
+import { notify } from "../../../lib/notifications";
 
 type TeamUser = {
   id: string;
@@ -40,8 +41,6 @@ export default function AdminTeamPage() {
   const [totalPages, setTotalPages] = useState(0);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -77,7 +76,6 @@ export default function AdminTeamPage() {
     }
     let current = true;
     setLoading(true);
-    setError("");
     apiClient<AdminUser>("/admin/profile")
       .then(() => load())
       .catch((reason: unknown) => {
@@ -89,13 +87,13 @@ export default function AdminTeamPage() {
           window.location.replace("/dashboard");
           return;
         }
-        if (current) {
-          setError(
+        if (current)
+          notify(
             reason instanceof Error
               ? reason.message
               : "Unable to verify Admin access.",
+            "error",
           );
-        }
       })
       .finally(() => {
         if (current) setLoading(false);
@@ -108,42 +106,42 @@ export default function AdminTeamPage() {
   async function refresh() {
     try {
       await load();
-      setNotice("");
     } catch (reason) {
-      setNotice(
+      notify(
         reason instanceof Error ? reason.message : "Unable to refresh team.",
+        "error",
       );
     }
   }
 
   async function updateManager(userId: string, managerId: string) {
-    setNotice("");
     try {
       await apiClient(`/users/${userId}/manager`, {
         method: "PATCH",
         body: JSON.stringify({ managerId: managerId || null }),
       });
       await refresh();
-      setNotice("BDE manager assignment updated.");
+      notify("BDE manager assignment updated.");
     } catch (reason) {
-      setNotice(
+      notify(
         reason instanceof Error ? reason.message : "Unable to update assignment.",
+        "error",
       );
     }
   }
 
   async function updateStatus(user: TeamUser) {
-    setNotice("");
     try {
       await apiClient(`/users/${user.id}/status`, {
         method: "PATCH",
         body: JSON.stringify({ isActive: !user.isActive }),
       });
       await refresh();
-      setNotice(`${user.fullName}'s account was updated.`);
+      notify(`${user.fullName}'s account was updated.`);
     } catch (reason) {
-      setNotice(
+      notify(
         reason instanceof Error ? reason.message : "Unable to update account.",
+        "error",
       );
     }
   }
@@ -151,7 +149,6 @@ export default function AdminTeamPage() {
   async function createUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setCreating(true);
-    setNotice("");
     try {
       await apiClient<TeamUser>("/users", {
         method: "POST",
@@ -171,10 +168,11 @@ export default function AdminTeamPage() {
       setShowCreateForm(false);
       setPage(1);
       await refresh();
-      setNotice("Team account created successfully.");
+      notify("Team account created successfully.");
     } catch (reason) {
-      setNotice(
+      notify(
         reason instanceof Error ? reason.message : "Unable to create account.",
+        "error",
       );
     } finally {
       setCreating(false);
@@ -191,7 +189,6 @@ export default function AdminTeamPage() {
     event.preventDefault();
     if (!editingUser) return;
     setSavingEdit(true);
-    setNotice("");
     try {
       await apiClient<TeamUser>(`/users/${editingUser.id}`, {
         method: "PATCH",
@@ -202,12 +199,13 @@ export default function AdminTeamPage() {
       });
       setEditingUser(null);
       await refresh();
-      setNotice("Team account details updated.");
+      notify("Team account details updated.");
     } catch (reason) {
-      setNotice(
+      notify(
         reason instanceof Error
           ? reason.message
           : "Unable to update team account.",
+        "error",
       );
     } finally {
       setSavingEdit(false);
@@ -228,18 +226,18 @@ export default function AdminTeamPage() {
     ) {
       return;
     }
-    setNotice("");
     try {
       await apiClient(`/users/${user.id}`, { method: "DELETE" });
-      setNotice(`${user.fullName}'s account was deleted.`);
+      notify(`${user.fullName}'s account was deleted.`);
       if (items.length === 1 && page > 1) {
         setPage((current) => current - 1);
       } else {
         await refresh();
       }
     } catch (reason) {
-      setNotice(
+      notify(
         reason instanceof Error ? reason.message : "Unable to delete account.",
+        "error",
       );
     }
   }
@@ -266,20 +264,6 @@ export default function AdminTeamPage() {
           </Link>
         </div>
       </header>
-
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      )}
-      {notice && (
-        <div className="workspace-notice" role="status">
-          {notice}
-          <button onClick={() => setNotice("")} aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-      )}
 
       <section className="panel admin-team">
         <div className="activity-tools admin-team-tools">

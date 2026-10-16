@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, apiClient } from "../../lib/api-client";
 import { getAccessToken } from "../../lib/auth";
+import { notify } from "../../lib/notifications";
 import AdminDashboard, { AdminProfile } from "./admin-dashboard";
 
 export default function AdminPage() {
@@ -31,11 +32,12 @@ export default function AdminPage() {
           router.replace("/dashboard");
           return;
         }
-        setError(
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to verify administrator access.",
-        );
+            : "Unable to verify administrator access.";
+        setError(message);
+        notify(message, "error");
         setChecking(false);
       });
   }, [router]);
@@ -44,14 +46,6 @@ export default function AdminPage() {
     return <main className="dashboard-loading">Verifying Admin access...</main>;
   }
   if (profile) return <AdminDashboard profile={profile} />;
-  if (error) {
-    return (
-      <main className="lead-workspace">
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      </main>
-    );
-  }
+  if (error) return null;
   return null;
 }

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ApiError, apiClient, logoutAndRedirect } from "../../lib/api-client";
 import { clearAccessToken } from "../../lib/auth";
+import { notify } from "../../lib/notifications";
 
 export type AdminProfile = {
   id: string;
@@ -39,7 +40,7 @@ type Performance = {
 type ReportRow = Record<string, unknown>;
 const reportTypes = [
   ["leads", "Leads"],
-  ["pipeline", "Pipeline"],
+  ["pipeline", "Sales Pipeline"],
   ["follow-ups", "Follow-ups"],
   ["proposals", "Proposals"],
   ["meetings", "Meetings"],
@@ -101,7 +102,12 @@ export default function AdminDashboard({ profile }: { profile: AdminProfile }) {
           window.location.assign("/dashboard");
           return;
         }
-        setError(reason instanceof Error ? reason.message : "Unable to load the Admin dashboard.");
+        const message =
+          reason instanceof Error
+            ? reason.message
+            : "Unable to load the Admin dashboard.";
+        setError(message);
+        notify(message, "error");
       })
       .finally(() => setLoading(false));
   }, [from, to]);
@@ -115,9 +121,12 @@ export default function AdminDashboard({ profile }: { profile: AdminProfile }) {
     apiClient<ReportRow[]>(`/admin/reports/${reportType}?${query}`)
       .then(setReportRows)
       .catch((reason: unknown) => {
-        setError(
-          reason instanceof Error ? reason.message : "Unable to load this report.",
-        );
+        const message =
+          reason instanceof Error
+            ? reason.message
+            : "Unable to load this report.";
+        setError(message);
+        notify(message, "error");
       })
       .finally(() => setReportLoading(false));
   }, [from, reportType, to]);
@@ -169,11 +178,6 @@ export default function AdminDashboard({ profile }: { profile: AdminProfile }) {
         </span>
       </section>
 
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      )}
 
       {overview && (
         <>
@@ -181,7 +185,7 @@ export default function AdminDashboard({ profile }: { profile: AdminProfile }) {
             {[
               ["Total leads", overview.pipeline.reduce((sum, row) => sum + row.count, 0)],
               ["Won deals", overview.metrics.wonDeals ?? 0],
-              ["Open pipeline", money(overview.revenue.pipeline)],
+              ["Open Sales Pipeline", money(overview.revenue.pipeline)],
               ["Revenue this month", money(overview.revenue.month)],
               ["Follow-ups today", overview.metrics.todaysFollowUps ?? 0],
               ["Overdue follow-ups", overview.metrics.overdueFollowUps ?? 0],
@@ -197,7 +201,7 @@ export default function AdminDashboard({ profile }: { profile: AdminProfile }) {
           <section className="panel admin-pipeline">
             <div className="panel-head">
               <div>
-                <h2>Company pipeline</h2>
+                <h2>Company Sales Pipeline</h2>
                 <p>Current lead counts and estimated value by stage</p>
               </div>
             </div>

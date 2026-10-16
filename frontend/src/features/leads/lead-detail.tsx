@@ -4,6 +4,9 @@ import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { apiClient } from "../../lib/api-client";
+import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
+import { notify } from "../../lib/notifications";
+import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 
 type Activity = {
   id: string;
@@ -11,14 +14,17 @@ type Activity = {
   description: string;
   outcome?: string | null;
   nextAction?: string | null;
-  previousStage?: string | null;
-  newStage?: string | null;
+  contactDate?: string | null;
+  contactType?: string | null;
+  customerResponse?: string | null;
+  expectedTimeline?: string | null;
   createdAt: string;
   user?: { fullName: string } | null;
 };
 type LeadDetails = {
   id: string;
   leadNumber: string;
+  leadDate: string;
   customerName: string;
   businessName?: string | null;
   businessCategory?: string | null;
@@ -37,19 +43,15 @@ type LeadDetails = {
   stage: string;
   nextAction?: string | null;
   followUpAt?: string | null;
+  remarks?: string | null;
   stageEnteredAt: string;
   assignedBde: { fullName: string };
   activities: Activity[];
 };
 
 const activityTypes = [
-  "Call",
-  "WhatsApp",
-  "Email",
   "Meeting",
-  "Demo",
-  "Note",
-  "Proposal Sent",
+  "Proposal",
   "Negotiation",
 ];
 const dateTime = (value: string) =>
@@ -57,26 +59,30 @@ const dateTime = (value: string) =>
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+const leadDate = (value: string) =>
+  new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+  }).format(new Date(`${value.slice(0, 10)}T00:00:00`));
 
 export function LeadDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const [lead, setLead] = useState<LeadDetails | null>(null);
-  const [type, setType] = useState("Call");
+  const [type, setType] = useState("Meeting");
   const [description, setDescription] = useState("");
   const [outcome, setOutcome] = useState("");
   const [nextAction, setNextAction] = useState("");
   const [followUpAt, setFollowUpAt] = useState("");
-  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const timelineActivities = lead?.activities ?? [];
 
   const load = useCallback(async () => {
     try {
       setLead(await apiClient<LeadDetails>(`/leads/${id}`));
-      setNotice("");
     } catch (error) {
-      setNotice(
+      notify(
         error instanceof Error ? error.message : "Unable to load this lead.",
+        "error",
       );
     }
   }, [id]);
@@ -85,8 +91,25 @@ export function LeadDetail() {
     if (id) void load();
   }, [id, load]);
 
+  useEffect(() => {
+    const refreshLead = (event: Event) => {
+      const { leadId } = (event as CustomEvent<{ leadId: string }>).detail;
+      if (leadId === id) void load();
+    };
+    window.addEventListener(LEAD_UPDATED_EVENT, refreshLead);
+    return () => window.removeEventListener(LEAD_UPDATED_EVENT, refreshLead);
+  }, [id, load]);
+
   async function addActivity(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!nextAction.trim()) {
+      notify("Enter the next action before adding an activity.", "error");
+      return;
+    }
+    if (!followUpAt) {
+      notify("Choose a next follow-up date and time.", "error");
+      return;
+    }
     setBusy(true);
     try {
       await apiClient<Activity>(`/leads/${id}/activities`, {
@@ -95,21 +118,20 @@ export function LeadDetail() {
           type,
           description,
           outcome: outcome || undefined,
-          nextAction: nextAction || undefined,
-          followUpAt: followUpAt
-            ? new Date(followUpAt).toISOString()
-            : undefined,
+          nextAction: nextAction.trim(),
+          followUpAt: new Date(followUpAt).toISOString(),
         }),
       });
       setDescription("");
       setOutcome("");
       setNextAction("");
       setFollowUpAt("");
-      setNotice("Activity added to the lead timeline.");
+      notify("Activity added to the lead timeline.");
       await load();
     } catch (error) {
-      setNotice(
+      notify(
         error instanceof Error ? error.message : "Unable to add activity.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -130,11 +152,7 @@ export function LeadDetail() {
         <Link className="detail-back" href="/leads">
           ← Leads
         </Link>
-        {notice ? (
-          <div className="workspace-notice">{notice}</div>
-        ) : (
-          <p>Loading lead...</p>
-        )}
+        <p>Loading lead...</p>
       </main>
     );
 
@@ -143,12 +161,6 @@ export function LeadDetail() {
       <Link className="detail-back" href="/leads">
         ← All leads
       </Link>
-      {notice && (
-        <div className="workspace-notice" role="status">
-          {notice}
-          <button onClick={() => setNotice("")}>×</button>
-        </div>
-      )}
       <header className="detail-header">
         <div>
           <p className="eyebrow">{lead.leadNumber}</p>
@@ -183,33 +195,32 @@ export function LeadDetail() {
           <div className="detail-section-heading timeline-heading">
             <div>
               <h2>Activity timeline</h2>
-              <p>Interactions and stage changes, newest first.</p>
+              <p>Customer interactions and updates, newest first.</p>
             </div>
           </div>
           <div className="activity-timeline">
-            {lead.activities.map((activity) => (
+            {timelineActivities.map((activity) => (
               <article className="timeline-item" key={activity.id}>
-                <span
-                  className={`timeline-marker ${activity.type === "STAGE_CHANGE" ? "stage-marker" : ""}`}
-                />
+                <span className="timeline-marker" />
                 <div className="timeline-entry">
                   <div className="timeline-entry-head">
                     <strong>
-                      {activity.type === "STAGE_CHANGE"
-                        ? "Stage updated"
-                        : activity.type.replaceAll("_", " ")}
+                      {activity.type.replaceAll("_", " ")}
                     </strong>
                     <time>{dateTime(activity.createdAt)}</time>
                   </div>
                   <p>{activity.description}</p>
-                  {activity.previousStage && activity.newStage && (
-                    <small>
-                      {activity.previousStage.replaceAll("_", " ")} →{" "}
-                      {activity.newStage.replaceAll("_", " ")}
-                    </small>
-                  )}
                   {activity.outcome && (
                     <small>Outcome: {activity.outcome}</small>
+                  )}
+                  {activity.contactDate && (
+                    <small>Contact date: {leadDate(activity.contactDate)}</small>
+                  )}
+                  {activity.contactType && (
+                    <small>Contact type: {activity.contactType}</small>
+                  )}
+                  {activity.expectedTimeline && (
+                    <small>Expected timeline: {activity.expectedTimeline}</small>
                   )}
                   {activity.nextAction && (
                     <small>Next: {activity.nextAction}</small>
@@ -220,7 +231,7 @@ export function LeadDetail() {
                 </div>
               </article>
             ))}
-            {lead.activities.length === 0 && (
+            {timelineActivities.length === 0 && (
               <p className="empty-list">No activity has been recorded yet.</p>
             )}
           </div>
@@ -229,6 +240,10 @@ export function LeadDetail() {
           <section className="panel detail-facts">
             <h2>Lead details</h2>
             <dl>
+              <div>
+                <dt>Lead date</dt>
+                <dd>{leadDate(lead.leadDate)}</dd>
+              </div>
               <div>
                 <dt>Assigned BDE</dt>
                 <dd>{lead.assignedBde.fullName}</dd>
@@ -258,6 +273,10 @@ export function LeadDetail() {
               <div>
                 <dt>Requirement</dt>
                 <dd>{lead.requirement || "—"}</dd>
+              </div>
+              <div>
+                <dt>Remarks</dt>
+                <dd>{lead.remarks || "—"}</dd>
               </div>
               <div>
                 <dt>Estimated budget</dt>
@@ -338,20 +357,20 @@ export function LeadDetail() {
                 />
               </label>
               <label>
-                Next action
+                Next action *
                 <input
+                  required
                   value={nextAction}
                   onChange={(event) => setNextAction(event.target.value)}
                 />
               </label>
-              <label>
-                Next follow-up
-                <input
-                  type="datetime-local"
-                  value={followUpAt}
-                  onChange={(event) => setFollowUpAt(event.target.value)}
-                />
-              </label>
+              <ClockDateTimePicker
+                className="form-wide"
+                label="Next follow-up"
+                required
+                value={followUpAt}
+                onChange={setFollowUpAt}
+              />
               <button className="primary" disabled={busy}>
                 {busy ? "Saving..." : "Add activity"}
               </button>

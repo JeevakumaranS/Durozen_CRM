@@ -8,7 +8,7 @@ import { NegotiationsService } from "./negotiations.service";
 
 @Controller("negotiations")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMIN")
+@Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class NegotiationsController {
   constructor(private readonly negotiations: NegotiationsService) {}
   @Get() list(@CurrentUser() user: { sub: string; role: string }) {

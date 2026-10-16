@@ -13,6 +13,7 @@ import { Roles } from "../../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { CreateMeetingDto } from "./dto/create-meeting.dto";
+import { LogMeetingDto } from "./dto/log-meeting.dto";
 import { RescheduleMeetingDto } from "./dto/reschedule-meeting.dto";
 import { UpdateMeetingDto } from "./dto/update-meeting.dto";
 import { MeetingsService } from "./meetings.service";
@@ -44,6 +45,12 @@ export class MeetingsController {
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.meetings.create(dto, user);
+  }
+  @Post("log") log(
+    @Body() dto: LogMeetingDto,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.meetings.log(dto, user);
   }
   @Patch(":id")
   update(

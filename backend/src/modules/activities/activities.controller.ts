@@ -15,6 +15,7 @@ export class ActivitiesController {
     @Query("from") from: string | undefined,
     @Query("to") to: string | undefined,
     @Query("search") search: string | undefined,
+    @Query("category") category: string | undefined,
     @Query("page") page: string | undefined,
     @Query("pageSize") pageSize: string | undefined,
     @CurrentUser() user: { sub: string; role: string },
@@ -26,6 +27,7 @@ export class ActivitiesController {
       from,
       to,
       search?.trim() || undefined,
+      category,
       Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1,
       Number.isInteger(requestedPageSize) && requestedPageSize > 0
         ? Math.min(requestedPageSize, 100)

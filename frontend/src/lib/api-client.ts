@@ -24,26 +24,33 @@ export async function apiClient<T>(path: string, init: RequestInit = {}) {
   });
   if (!response.ok) {
     const responseText = await response.text();
+    let message = responseText;
+    let tokenExpired = false;
+    try {
+      const body: unknown = JSON.parse(responseText);
+      if (body && typeof body === "object") {
+        if ("code" in body) tokenExpired = body.code === "TOKEN_EXPIRED";
+        if ("message" in body) {
+          const detail = body.message;
+          message = Array.isArray(detail)
+            ? detail.join(", ")
+            : String(detail);
+        }
+      }
+    } catch {
+      message = responseText;
+    }
     if (
       response.status === 401 &&
       path !== "/auth/login" &&
       path !== "/auth/logout" &&
       typeof window !== "undefined"
     ) {
+      if (tokenExpired) {
+        window.sessionStorage.setItem("durozen_token_expired", "true");
+      }
       clearAccessToken();
       window.location.assign("/login");
-    }
-    let message = responseText;
-    try {
-      const body: unknown = JSON.parse(responseText);
-      if (body && typeof body === "object" && "message" in body) {
-        const detail = body.message;
-        message = Array.isArray(detail)
-          ? detail.join(", ")
-          : String(detail);
-      }
-    } catch {
-      message = responseText;
     }
     throw new ApiError(message || "The request could not be completed.", response.status);
   }

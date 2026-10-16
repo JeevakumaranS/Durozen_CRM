@@ -4,7 +4,11 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { LeadPriority, LeadStage as PrismaLeadStage } from "@prisma/client";
+import {
+  LeadPriority,
+  LeadStage as PrismaLeadStage,
+  Prisma,
+} from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { leadScope } from "../../common/authorization/lead-scope";
@@ -14,6 +18,11 @@ import { CreateActivityDto } from "./dto/create-activity.dto";
 import { UpdateLeadDto } from "./dto/update-lead.dto";
 import { enforceNextAction } from "./rules/next-action.rule";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
+
+const CALL_MESSAGE_METHODS = new Set(["Phone Call", "WhatsApp", "Email"]);
+const SALES_TASK_TYPES = new Set(["Proposal Follow-up", "Negotiation"]);
+const activityContactMethod = (activityType: string) =>
+  activityType === "Call" ? "Phone Call" : activityType;
 
 @Injectable()
 export class LeadsService {
@@ -108,6 +117,22 @@ export class LeadsService {
         },
         include: { user: { select: { fullName: true } } },
       });
+      const contactMethod = activityContactMethod(dto.type);
+      if (CALL_MESSAGE_METHODS.has(contactMethod)) {
+        const completedAt = new Date();
+        await tx.callMessage.create({
+          data: {
+            leadId: id,
+            userId: user.sub,
+            dueAt: completedAt,
+            contactMethod,
+            description: dto.description,
+            outcome: dto.outcome,
+            status: "COMPLETED",
+            completedAt,
+          },
+        });
+      }
       if (
         lead.stage !== "WON" &&
         lead.stage !== "LOST" &&
@@ -126,11 +151,24 @@ export class LeadsService {
           data: {
             nextAction: dto.nextAction,
             followUpAt: dto.followUpAt ? nextDate : undefined,
-            ...(dto.followUpAt
+            ...(nextDate &&
+            dto.nextAction &&
+            CALL_MESSAGE_METHODS.has(dto.nextAction)
+              ? {
+                  callMessages: {
+                    create: {
+                      userId: user.sub,
+                      dueAt: nextDate,
+                      contactMethod: dto.nextAction,
+                    },
+                  },
+                }
+              : {}),
+            ...(nextDate && SALES_TASK_TYPES.has(dto.type)
               ? {
                   followUps: {
                     create: {
-                      dueAt: nextDate!,
+                      dueAt: nextDate,
                       type: dto.type,
                       nextAction: dto.nextAction ?? lead.nextAction!,
                     },
@@ -148,8 +186,24 @@ export class LeadsService {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const assignedBdeId =
       user.role === "BDE" ? user.sub : dto.assignedBdeId;
-    const stage = LeadStage.NEW_LEAD as PrismaLeadStage;
-    enforceNextAction(stage, dto.nextAction, new Date(dto.followUpAt));
+    const stage = (dto.stage ?? LeadStage.NEW_LEAD) as PrismaLeadStage;
+    const followUpAt = dto.followUpAt
+      ? new Date(dto.followUpAt)
+      : undefined;
+    enforceNextAction(stage, dto.nextAction, followUpAt);
+    if (
+      stage === LeadStage.WON &&
+      (dto.finalDealValue === undefined || !dto.wonService?.trim())
+    ) {
+      throw new BadRequestException(
+        "A final deal value and service are required to create a WON lead",
+      );
+    }
+    if (stage === LeadStage.LOST && !dto.lostReason?.trim()) {
+      throw new BadRequestException(
+        "A lost reason is required to create a LOST lead",
+      );
+    }
     const bde = await this.prisma.user.findFirst({
       where: {
         id: assignedBdeId,
@@ -173,6 +227,7 @@ export class LeadsService {
     return this.prisma.lead.create({
       data: {
         leadNumber: `DZN-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
+        leadDate: dto.leadDate ? new Date(dto.leadDate) : new Date(),
         customerName: dto.customerName,
         businessName: dto.businessName,
         businessCategory: dto.businessCategory,
@@ -181,27 +236,51 @@ export class LeadsService {
         location: dto.location,
         leadSource: dto.leadSource,
         priority: (dto.priority ?? "WARM") as LeadPriority,
-        estimatedBudget: dto.estimatedBudget,
+        estimatedBudget:
+          dto.estimatedBudget === undefined
+            ? undefined
+            : dto.estimatedBudget === null
+              ? null
+              : new Prisma.Decimal(dto.estimatedBudget),
         assignedBdeId,
         stage,
         nextAction: dto.nextAction,
-        followUpAt: new Date(dto.followUpAt),
+        followUpAt,
+        remarks: dto.remarks,
         requirement: dto.requirement,
+        finalDealValue: dto.finalDealValue,
+        wonService: dto.wonService,
+        paymentStatus: dto.paymentStatus,
+        expectedStartDate: dto.expectedStartDate
+          ? new Date(dto.expectedStartDate)
+          : undefined,
+        wonRemarks: dto.wonRemarks,
+        lostReason: dto.lostReason,
         activities: {
           create: {
             type: "NOTE",
             description: "Lead created",
-            userId: user.sub,
-            newStage: stage,
+            user: { connect: { id: user.sub } },
           },
         },
-        followUps: {
-          create: {
-            dueAt: new Date(dto.followUpAt),
-            type: "Call",
-            nextAction: dto.nextAction,
-          },
-        },
+        callMessages: CALL_MESSAGE_METHODS.has(dto.nextAction)
+          ? {
+              create: {
+                userId: user.sub,
+                dueAt: followUpAt!,
+                contactMethod: dto.nextAction,
+              },
+            }
+          : undefined,
+        followUps: SALES_TASK_TYPES.has(dto.nextAction)
+          ? {
+              create: {
+                dueAt: followUpAt!,
+                type: dto.nextAction,
+                nextAction: dto.nextAction,
+              },
+            }
+          : undefined,
       },
       include: { assignedBde: { select: { id: true, fullName: true } } },
     });
@@ -301,6 +380,20 @@ export class LeadsService {
     if (stageChanged) {
       this.transitions.assertAllowed(existing.stage, nextStage);
     }
+    const requiresContactDetails =
+      (existing.stage === "NEW_LEAD" &&
+        ["CONTACTED", "INTERESTED"].includes(nextStage)) ||
+      (existing.stage === "CONTACTED" && nextStage === "INTERESTED");
+    if (
+      requiresContactDetails &&
+      (!dto.contactDate?.trim() ||
+        !dto.contactType?.trim() ||
+        !dto.customerResponse?.trim())
+    ) {
+      throw new BadRequestException(
+        "Contact date, contact type, and customer response are required for this stage change",
+      );
+    }
     const followUpChanged =
       (dto.followUpAt !== undefined &&
         new Date(dto.followUpAt).getTime() !==
@@ -311,17 +404,24 @@ export class LeadsService {
       data: {
         customerName: dto.customerName,
         businessName: dto.businessName,
+        leadDate: dto.leadDate ? new Date(dto.leadDate) : undefined,
         businessCategory: dto.businessCategory,
         mobileNumber: dto.mobileNumber,
         email: dto.email,
         location: dto.location,
         leadSource: dto.leadSource,
         priority: dto.priority as LeadPriority | undefined,
-        estimatedBudget: dto.estimatedBudget,
+        estimatedBudget:
+          dto.estimatedBudget === undefined
+            ? undefined
+            : dto.estimatedBudget === null
+              ? null
+              : new Prisma.Decimal(dto.estimatedBudget),
         assignedBdeId: dto.assignedBdeId,
         stage: nextStage,
         nextAction: dto.nextAction,
         followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : undefined,
+        remarks: dto.remarks,
         requirement: dto.requirement,
         finalDealValue: dto.finalDealValue,
         wonService: dto.wonService,
@@ -332,16 +432,24 @@ export class LeadsService {
         wonRemarks: dto.wonRemarks,
         lostReason: dto.lostReason,
         stageEnteredAt: stageChanged ? new Date() : undefined,
-        activities: stageChanged
+        activities: requiresContactDetails
           ? {
-              create: {
-                type: "STAGE_CHANGE",
-                description: `Stage changed from ${existing.stage} to ${nextStage}`,
-                userId:
-                  user.sub,
-                previousStage: existing.stage,
-                newStage: nextStage,
-              },
+              create: [
+                {
+                  type:
+                    nextStage === "CONTACTED" ? "CONTACT" : "QUALIFICATION",
+                  description:
+                    nextStage === "CONTACTED"
+                      ? "Customer contact recorded"
+                      : "Customer interest confirmed",
+                  outcome: dto.customerResponse,
+                  contactDate: new Date(dto.contactDate!),
+                  contactType: dto.contactType,
+                  customerResponse: dto.customerResponse,
+                  expectedTimeline: dto.expectedTimeline,
+                  user: { connect: { id: user.sub } },
+                },
+              ],
             }
           : undefined,
         followUps:
@@ -354,13 +462,49 @@ export class LeadsService {
               }
             : followUpChanged
               ? {
-                  create: {
-                    dueAt: dto.followUpAt
-                      ? new Date(dto.followUpAt)
-                      : existing.followUpAt!,
-                    type: "Call",
-                    nextAction: dto.nextAction ?? existing.nextAction!,
+                  updateMany: {
+                    where: { status: "PENDING" },
+                    data: { status: "CANCELLED" },
                   },
+                  ...(dto.nextAction && SALES_TASK_TYPES.has(dto.nextAction)
+                    ? {
+                        create: {
+                          dueAt: dto.followUpAt
+                            ? new Date(dto.followUpAt)
+                            : existing.followUpAt!,
+                          type: dto.nextAction,
+                          nextAction: dto.nextAction,
+                        },
+                      }
+                    : {}),
+                }
+              : undefined,
+        callMessages:
+          nextStage === "WON" || nextStage === "LOST"
+            ? {
+                updateMany: {
+                  where: { status: "PENDING" },
+                  data: { status: "CANCELLED" },
+                },
+              }
+            : followUpChanged
+              ? {
+                  updateMany: {
+                    where: { status: "PENDING" },
+                    data: { status: "CANCELLED" },
+                  },
+                  ...(dto.nextAction &&
+                  CALL_MESSAGE_METHODS.has(dto.nextAction)
+                    ? {
+                        create: {
+                          userId: user.sub,
+                          dueAt: dto.followUpAt
+                            ? new Date(dto.followUpAt)
+                            : existing.followUpAt!,
+                          contactMethod: dto.nextAction,
+                        },
+                      }
+                    : {}),
                 }
               : undefined,
       },

@@ -149,9 +149,6 @@ export class UsersService {
         data: {
           fullName: dto.fullName.trim(),
           email: dto.email.trim().toLowerCase(),
-          ...(existing.email.toLowerCase() !== dto.email.trim().toLowerCase()
-            ? { tokenVersion: { increment: 1 } }
-            : {}),
         },
         select: {
           id: true,
@@ -219,7 +216,7 @@ export class UsersService {
   ): Promise<Pick<User, "id" | "fullName" | "email" | "role" | "isActive">> {
     return this.prisma.user.update({
       where: { id },
-      data: { isActive, tokenVersion: { increment: 1 } },
+      data: { isActive },
       select: {
         id: true,
         fullName: true,

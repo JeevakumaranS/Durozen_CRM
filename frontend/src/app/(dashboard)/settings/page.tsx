@@ -3,18 +3,18 @@
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { apiClient } from "../../../lib/api-client";
+import { notify } from "../../../lib/notifications";
 
 export default function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (newPassword !== confirmation) {
-      setNotice("New passwords do not match.");
+      notify("New passwords do not match.", "error");
       return;
     }
     setBusy(true);
@@ -26,10 +26,11 @@ export default function SettingsPage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmation("");
-      setNotice("Password updated.");
+      notify("Password updated.");
     } catch (error) {
-      setNotice(
+      notify(
         error instanceof Error ? error.message : "Unable to update password.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -48,12 +49,6 @@ export default function SettingsPage() {
           Dashboard
         </Link>
       </header>
-      {notice && (
-        <div className="workspace-notice" role="status">
-          {notice}
-          <button onClick={() => setNotice("")}>×</button>
-        </div>
-      )}
       <section className="panel settings-panel">
         <div>
           <h2>Change password</h2>

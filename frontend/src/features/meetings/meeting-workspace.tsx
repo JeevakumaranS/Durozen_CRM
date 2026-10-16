@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { apiClient } from "../../lib/api-client";
+import { notify } from "../../lib/notifications";
+import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 
 type MeetingStatus = "SCHEDULED" | "COMPLETED" | "CANCELLED";
 type MeetingActivity = {
@@ -114,8 +116,13 @@ export function MeetingWorkspace() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showLogForm, setShowLogForm] = useState(false);
+  const [logLeadId, setLogLeadId] = useState("");
+  const [logMeetingAt, setLogMeetingAt] = useState("");
+  const [logType, setLogType] = useState(TYPES[0]);
+  const [logDescription, setLogDescription] = useState("");
+  const [logOutcome, setLogOutcome] = useState("");
   const [editing, setEditing] = useState<Meeting | null>(null);
   const [rescheduling, setRescheduling] = useState<Meeting | null>(null);
   const [viewing, setViewing] = useState<Meeting | null>(null);
@@ -143,9 +150,10 @@ export function MeetingWorkspace() {
     } catch (reason) {
       setMeetings([]);
       setLeads([]);
-      setError(
-        reason instanceof Error ? reason.message : "Unable to load meetings.",
-      );
+      const message =
+        reason instanceof Error ? reason.message : "Unable to load meetings.";
+      setError(message);
+      notify(message, "error");
     } finally {
       setLoading(false);
     }
@@ -202,6 +210,15 @@ export function MeetingWorkspace() {
 
   async function saveMeeting(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!editing && !form.meetingAt) {
+      notify("Choose the meeting date and time.", "error");
+      return;
+    }
+
+    if (!form.followUpAt) {
+      notify("Choose the next follow-up date and time.", "error");
+      return;
+    }
     setBusy(true);
     setError("");
     const followUpChanged =
@@ -233,11 +250,47 @@ export function MeetingWorkspace() {
       );
       setShowForm(false);
       setEditing(null);
-      setNotice(editing ? "Meeting details updated." : "Meeting scheduled.");
+      notify(editing ? "Meeting details updated." : "Meeting scheduled.");
       await load();
     } catch (reason) {
-      setError(
+      notify(
         reason instanceof Error ? reason.message : "Unable to save meeting.",
+        "error",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logMeeting(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!logLeadId || !logMeetingAt || !logDescription.trim()) {
+      notify("Choose a lead and meeting date, and enter meeting notes.", "error");
+      return;
+    }
+    setBusy(true);
+    try {
+      await apiClient("/meetings/log", {
+        method: "POST",
+        body: JSON.stringify({
+          leadId: logLeadId,
+          meetingAt: dateValue(logMeetingAt),
+          type: logType,
+          description: logDescription.trim(),
+          outcome: logOutcome.trim() || undefined,
+        }),
+      });
+      setShowLogForm(false);
+      setLogLeadId("");
+      setLogMeetingAt("");
+      setLogDescription("");
+      setLogOutcome("");
+      notify("Meeting logged to Meetings and the lead activity history.");
+      await load();
+    } catch (reason) {
+      notify(
+        reason instanceof Error ? reason.message : "Unable to log meeting.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -247,6 +300,10 @@ export function MeetingWorkspace() {
   async function rescheduleMeeting(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!rescheduling) return;
+    if (!rescheduleAt) {
+      notify("Choose the new meeting date and time.", "error");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -254,14 +311,15 @@ export function MeetingWorkspace() {
         method: "PATCH",
         body: JSON.stringify({ meetingAt: dateValue(rescheduleAt) }),
       });
-      setNotice("Meeting rescheduled. The previous time remains in its history.");
+      notify("Meeting rescheduled. The previous time remains in its history.");
       setRescheduling(null);
       await load();
     } catch (reason) {
-      setError(
+      notify(
         reason instanceof Error
           ? reason.message
           : "Unable to reschedule meeting.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -280,16 +338,17 @@ export function MeetingWorkspace() {
       await apiClient<Meeting>(`/meetings/${meeting.id}/${action}`, {
         method: "PATCH",
       });
-      setNotice(
+      notify(
         action === "complete" ? "Meeting marked completed." : "Meeting cancelled.",
       );
       if (viewing?.id === meeting.id) setViewing(null);
       await load();
     } catch (reason) {
-      setError(
+      notify(
         reason instanceof Error
           ? reason.message
           : `Unable to ${action} meeting.`,
+        "error",
       );
     } finally {
       setBusy(false);
@@ -308,26 +367,26 @@ export function MeetingWorkspace() {
         </div>
         <div className="workspace-actions">
           <Link className="secondary-action" href="/pipeline">
-            Pipeline
+            Sales Pipeline
           </Link>
+          <button
+            className="secondary-action"
+            onClick={() => {
+              setLogLeadId("");
+              setLogMeetingAt(localDateTime());
+              setLogType(TYPES[0]);
+              setLogDescription("");
+              setLogOutcome("");
+              setShowLogForm(true);
+            }}
+          >
+            Log meeting
+          </button>
           <button className="primary" onClick={startCreate}>
             + Schedule meeting
           </button>
         </div>
       </header>
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      )}
-      {notice && (
-        <div className="workspace-notice" role="status">
-          {notice}
-          <button onClick={() => setNotice("")} aria-label="Dismiss">
-            ×
-          </button>
-        </div>
-      )}
       <div className="meeting-tools">
         <label className="search-field">
           <span aria-hidden="true">⌕</span>
@@ -558,17 +617,13 @@ export function MeetingWorkspace() {
                 </label>
               )}
               {!editing && (
-                <label>
-                  Meeting date and time *
-                  <input
-                    type="datetime-local"
-                    required
-                    value={form.meetingAt}
-                    onChange={(event) =>
-                      setForm({ ...form, meetingAt: event.target.value })
-                    }
-                  />
-                </label>
+                <ClockDateTimePicker
+                  className="form-wide"
+                  label="Meeting"
+                  required
+                  value={form.meetingAt}
+                  onChange={(meetingAt) => setForm({ ...form, meetingAt })}
+                />
               )}
               <label>
                 Meeting type *
@@ -635,17 +690,13 @@ export function MeetingWorkspace() {
                   }
                 />
               </label>
-              <label>
-                Next follow-up *
-                <input
-                  type="datetime-local"
-                  required
-                  value={form.followUpAt}
-                  onChange={(event) =>
-                    setForm({ ...form, followUpAt: event.target.value })
-                  }
-                />
-              </label>
+              <ClockDateTimePicker
+                className="form-wide"
+                label="Next follow-up"
+                required
+                value={form.followUpAt}
+                onChange={(followUpAt) => setForm({ ...form, followUpAt })}
+              />
               <label>
                 Next action *
                 <input
@@ -667,6 +718,90 @@ export function MeetingWorkspace() {
                   disabled={busy || (!editing && leads.length === 0)}
                 >
                   {busy ? "Saving..." : editing ? "Save changes" : "Schedule"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {showLogForm && (
+        <div className="modal-backdrop">
+          <section
+            className="lead-modal meeting-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="meeting-log-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">CUSTOMER CONVERSATION</p>
+                <h2 id="meeting-log-title">Log meeting</h2>
+              </div>
+              <button
+                className="modal-close"
+                aria-label="Close"
+                onClick={() => setShowLogForm(false)}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="lead-form meeting-form" onSubmit={logMeeting}>
+              <label className="form-wide">
+                Lead *
+                <select
+                  required
+                  value={logLeadId}
+                  onChange={(event) => setLogLeadId(event.target.value)}
+                >
+                  <option value="">Select an active lead</option>
+                  {leads.map((lead) => (
+                    <option key={lead.id} value={lead.id}>
+                      {lead.customerName} · {lead.stage.replaceAll("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Meeting type *
+                <select
+                  required
+                  value={logType}
+                  onChange={(event) => setLogType(event.target.value)}
+                >
+                  {TYPES.map((meetingType) => (
+                    <option key={meetingType}>{meetingType}</option>
+                  ))}
+                </select>
+              </label>
+              <ClockDateTimePicker
+                label="Meeting date and time *"
+                required
+                value={logMeetingAt}
+                onChange={setLogMeetingAt}
+              />
+              <label className="form-wide">
+                Meeting notes *
+                <textarea
+                  required
+                  rows={3}
+                  value={logDescription}
+                  onChange={(event) => setLogDescription(event.target.value)}
+                />
+              </label>
+              <label className="form-wide">
+                Outcome
+                <textarea
+                  rows={2}
+                  value={logOutcome}
+                  onChange={(event) => setLogOutcome(event.target.value)}
+                />
+              </label>
+              <div className="form-footer">
+                <p>The completed meeting will appear in Meetings and the lead’s activity history.</p>
+                <button className="primary" disabled={busy}>
+                  {busy ? "Saving..." : "Log meeting"}
                 </button>
               </div>
             </form>
@@ -696,15 +831,13 @@ export function MeetingWorkspace() {
               </button>
             </div>
             <form onSubmit={rescheduleMeeting}>
-              <label>
-                New meeting date and time
-                <input
-                  type="datetime-local"
-                  required
-                  value={rescheduleAt}
-                  onChange={(event) => setRescheduleAt(event.target.value)}
-                />
-              </label>
+              <ClockDateTimePicker
+                className="form-wide"
+                label="New meeting"
+                required
+                value={rescheduleAt}
+                onChange={setRescheduleAt}
+              />
               <p>The previous time will remain in the meeting history.</p>
               <button className="primary" disabled={busy}>
                 {busy ? "Saving..." : "Confirm reschedule"}

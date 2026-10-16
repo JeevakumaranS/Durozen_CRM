@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { apiClient } from "../../lib/api-client";
+import { notify } from "../../lib/notifications";
+import { notifyLeadUpdated } from "../../lib/lead-events";
+import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 
 type LeadOption = {
   id: string;
@@ -10,6 +13,19 @@ type LeadOption = {
   stage: string;
   assignedBde: { fullName: string };
 };
+type ContactType =
+  | "Phone Call"
+  | "WhatsApp"
+  | "Email"
+  | "Direct Meeting"
+  | "Other";
+const CONTACT_TYPES: ContactType[] = [
+  "Phone Call",
+  "WhatsApp",
+  "Email",
+  "Direct Meeting",
+  "Other",
+];
 type Assignee = { id: string; fullName: string };
 type FollowUp = {
   id: string;
@@ -25,6 +41,7 @@ type FollowUp = {
     mobileNumber: string;
     stage: string;
     assignedBde: { id: string; fullName: string };
+    activities?: { contactType: string | null }[];
   };
 };
 type FollowUpSummary = {
@@ -35,15 +52,37 @@ type FollowUpSummary = {
 };
 type Scope = "today" | "upcoming" | "overdue" | "completed";
 type FollowUpStatus = FollowUp["status"];
+type NextLeadStage = "CONTACTED" | "INTERESTED" | "LOST";
+type CompletionErrors = Partial<
+  Record<
+    | "nextAction"
+    | "customerResponse"
+    | "requirement"
+    | "meetingChoice"
+    | "meetingDate"
+    | "meetingTime"
+    | "meetingType",
+    string
+  >
+>;
+type FollowUpFilterKey =
+  | "type"
+  | "assignee"
+  | "status"
+  | "date";
+const RESCHEDULE_REASONS = [
+  "Customer requested",
+  "Customer unavailable",
+  "BDE unavailable",
+] as const;
+const MEETING_TYPES = [
+  "In-person",
+  "Phone",
+  "Video",
+];
 const TYPES = [
-  "Call",
-  "WhatsApp",
-  "Meeting",
-  "Demo",
-  "Email",
   "Proposal Follow-up",
   "Negotiation",
-  "Other",
 ];
 const BUSINESS_TIME_ZONE = "Asia/Kolkata";
 const businessDateTimeParts = (date: Date) =>
@@ -86,6 +125,12 @@ const formatDate = (value: string) =>
     timeStyle: "short",
     timeZone: BUSINESS_TIME_ZONE,
   }).format(new Date(value));
+const formatBusinessDateTime = (value: string) =>
+  new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: BUSINESS_TIME_ZONE,
+  }).format(new Date(businessDateTimeIso(value)));
 const businessDateKey = (value: Date) => {
   const values = Object.fromEntries(
     new Intl.DateTimeFormat("en", {
@@ -115,6 +160,14 @@ export function FollowUpWorkspace() {
   });
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [enabledFilters, setEnabledFilters] = useState<
+    Record<FollowUpFilterKey, boolean>
+  >({
+    type: false,
+    assignee: false,
+    status: false,
+    date: false,
+  });
   const [typeFilter, setTypeFilter] = useState("");
   const [assignedBdeId, setAssignedBdeId] = useState("");
   const [statusFilter, setStatusFilter] = useState<FollowUpStatus | "">("");
@@ -123,14 +176,13 @@ export function FollowUpWorkspace() {
   const [loading, setLoading] = useState(true);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [leadId, setLeadId] = useState("");
   const [dueAt, setDueAt] = useState(
     businessInputValue(new Date(Date.now() + 86400000)),
   );
-  const [type, setType] = useState("Call");
+  const [type, setType] = useState("Proposal Follow-up");
   const [nextAction, setNextAction] = useState("");
   const [remarks, setRemarks] = useState("");
   const [editing, setEditing] = useState<{
@@ -140,7 +192,35 @@ export function FollowUpWorkspace() {
   const [nextDueAt, setNextDueAt] = useState("");
   const [nextActionText, setNextActionText] = useState("");
   const [outcomeNotes, setOutcomeNotes] = useState("");
+  const [contactDate, setContactDate] = useState(businessDateKey(new Date()));
+  const [contactType, setContactType] = useState<ContactType>("Phone Call");
+  const [customerResponse, setCustomerResponse] = useState("");
+  const [requirement, setRequirement] = useState("");
+  const [selectedNextStage, setSelectedNextStage] =
+    useState<NextLeadStage | "">("");
+  const [completionErrors, setCompletionErrors] =
+    useState<CompletionErrors>({});
+  const [meetingChoice, setMeetingChoice] = useState<"yes" | "no" | "">("");
+  const [meetingDate, setMeetingDate] = useState("");
+  const [meetingTime, setMeetingTime] = useState("");
+  const [meetingType, setMeetingType] = useState("");
+  const [rescheduleReason, setRescheduleReason] =
+    useState<(typeof RESCHEDULE_REASONS)[number]>("Customer requested");
   const listRequestId = useRef(0);
+
+  function toggleFilter(key: FollowUpFilterKey, enabled: boolean) {
+    setEnabledFilters((current) => ({ ...current, [key]: enabled }));
+    if (enabled) return;
+
+    resetPage();
+    if (key === "type") setTypeFilter("");
+    if (key === "assignee") setAssignedBdeId("");
+    if (key === "status") setStatusFilter("");
+    if (key === "date") {
+      setFrom("");
+      setTo("");
+    }
+  }
 
   const load = useCallback(async () => {
     const requestId = ++listRequestId.current;
@@ -148,27 +228,39 @@ export function FollowUpWorkspace() {
     setError("");
     const params = new URLSearchParams({ scope });
     if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
-    if (typeFilter) params.set("type", typeFilter);
-    if (assignedBdeId) params.set("assignedBdeId", assignedBdeId);
-    if (statusFilter) params.set("status", statusFilter);
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
+    if (enabledFilters.type && typeFilter) params.set("type", typeFilter);
+    if (enabledFilters.assignee && assignedBdeId)
+      params.set("assignedBdeId", assignedBdeId);
+    if (enabledFilters.status && statusFilter)
+      params.set("status", statusFilter);
+    if (enabledFilters.date && from) params.set("from", from);
+    if (enabledFilters.date && to) params.set("to", to);
     try {
       const followUps = await apiClient<FollowUp[]>(`/follow-ups?${params}`);
       if (requestId === listRequestId.current) setItems(followUps);
     } catch (reason) {
       if (requestId === listRequestId.current) {
         setItems([]);
-        setError(
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load follow-ups.",
-        );
+            : "Unable to load tasks.";
+        setError(message);
+        notify(message, "error");
       }
     } finally {
       if (requestId === listRequestId.current) setLoading(false);
     }
-  }, [assignedBdeId, debouncedSearch, from, scope, statusFilter, to, typeFilter]);
+  }, [
+    assignedBdeId,
+    debouncedSearch,
+    enabledFilters,
+    from,
+    scope,
+    statusFilter,
+    to,
+    typeFilter,
+  ]);
 
   useEffect(() => {
     void load();
@@ -193,10 +285,11 @@ export function FollowUpWorkspace() {
         setAssignees(authorizedAssignees);
       })
       .catch((reason: unknown) => {
-        setError(
+        notify(
           reason instanceof Error
             ? reason.message
-            : "Unable to load follow-up summary and options.",
+            : "Unable to load task summary and options.",
+          "error",
         );
       })
       .finally(() => setSummaryLoading(false));
@@ -216,6 +309,10 @@ export function FollowUpWorkspace() {
 
   async function createFollowUp(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!dueAt) {
+      notify("Choose a due date and time.", "error");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -232,14 +329,15 @@ export function FollowUpWorkspace() {
       setShowCreate(false);
       setNextAction("");
       setRemarks("");
-      setNotice("Follow-up scheduled.");
+      notify("Task scheduled.");
       setPage(1);
       await Promise.all([load(), refreshSummary()]);
     } catch (reason) {
-      setError(
+      notify(
         reason instanceof Error
           ? reason.message
-          : "Unable to schedule follow-up.",
+          : "Unable to schedule task.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -248,6 +346,76 @@ export function FollowUpWorkspace() {
 
   async function updateFollowUp(item: FollowUp) {
     if (!editing) return;
+    const completing = editing.status === "COMPLETED";
+    const scheduleMeeting =
+      completing &&
+      selectedNextStage === "INTERESTED" &&
+      meetingChoice === "yes";
+    const nextErrors: CompletionErrors = {};
+    if (completing) {
+      if (!selectedNextStage) {
+        nextErrors.nextAction = "Choose the next action.";
+      }
+      if (
+        selectedNextStage === "INTERESTED" &&
+        meetingChoice !== "yes" &&
+        meetingChoice !== "no"
+      ) {
+        nextErrors.meetingChoice = "Choose Yes or No.";
+      }
+      if (selectedNextStage !== "LOST") {
+        if (!customerResponse.trim()) {
+          nextErrors.customerResponse = "Enter the next customer response.";
+        }
+        if (!requirement.trim()) {
+          nextErrors.requirement = "Enter the requirements.";
+        }
+      }
+      if (scheduleMeeting) {
+        if (!meetingDate) {
+          nextErrors.meetingDate = "Choose a meeting date.";
+        } else if (meetingDate < businessDateKey(new Date())) {
+          nextErrors.meetingDate = "Meeting date cannot be in the past.";
+        }
+        if (!meetingTime) {
+          nextErrors.meetingTime = "Choose a meeting time.";
+        }
+        if (!meetingType) {
+          nextErrors.meetingType = "Choose a meeting type.";
+        }
+        if (
+          meetingDate &&
+          meetingTime &&
+          !nextErrors.meetingDate &&
+          new Date(
+            businessDateTimeIso(`${meetingDate}T${meetingTime}`),
+          ).getTime() <= Date.now()
+        ) {
+          nextErrors.meetingTime = "Meeting date and time must be in the future.";
+        }
+      }
+      setCompletionErrors(nextErrors);
+      if (Object.keys(nextErrors).length) return;
+    } else if (
+      !completing &&
+      !["WON", "LOST"].includes(item.lead.stage) &&
+      (!nextDueAt || !nextActionText.trim())
+    ) {
+      notify(
+        !nextActionText.trim()
+          ? "Enter the next action."
+          : "Choose the next task date and time.",
+        "error",
+      );
+      return;
+    }
+    if (
+      editing.status === "RESCHEDULED" &&
+      !RESCHEDULE_REASONS.includes(rescheduleReason)
+    ) {
+      notify("Choose a reason for rescheduling.", "error");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -255,27 +423,84 @@ export function FollowUpWorkspace() {
         method: "PATCH",
         body: JSON.stringify({
           status: editing.status,
-          dueAt:
-            nextDueAt && nextActionText.trim()
+          dueAt: completing
+            ? scheduleMeeting
+              ? businessDateTimeIso(`${meetingDate}T${meetingTime}`)
+              : undefined
+            : nextDueAt && nextActionText.trim()
               ? businessDateTimeIso(nextDueAt)
               : undefined,
-          nextAction: nextActionText.trim() || undefined,
-          remarks: outcomeNotes.trim() || undefined,
+          nextAction: completing
+            ? undefined
+            : nextActionText.trim() || undefined,
+          remarks:
+            editing.status === "COMPLETED"
+              ? outcomeNotes.trim() || null
+              : outcomeNotes.trim() || undefined,
+          ...(editing.status === "RESCHEDULED"
+            ? { rescheduleReason }
+            : {}),
+          ...(editing.status === "COMPLETED"
+            ? {
+                contactDate: new Date(
+                  `${contactDate}T00:00:00.000Z`,
+                ).toISOString(),
+                contactType,
+                customerResponse: customerResponse.trim() || undefined,
+                requirement:
+                  selectedNextStage === "LOST"
+                    ? undefined
+                    : requirement.trim(),
+                remarks: outcomeNotes.trim() || null,
+                ...(selectedNextStage
+                  ? {
+                      nextStage: selectedNextStage,
+                      ...(selectedNextStage === "INTERESTED"
+                        ? { scheduleMeeting }
+                        : {}),
+                      ...(scheduleMeeting
+                        ? {
+                            meetingAt: businessDateTimeIso(
+                              `${meetingDate}T${meetingTime}`,
+                            ),
+                            meetingType,
+                          }
+                        : {}),
+                    }
+                  : {}),
+              }
+            : {}),
         }),
       });
+      if (editing.status === "COMPLETED") {
+        notifyLeadUpdated(item.lead.id);
+      }
       const nextStatus = editing.status;
       setEditing(null);
       setOutcomeNotes("");
+      setCustomerResponse("");
+      setRequirement("");
+      setSelectedNextStage("");
+      setMeetingChoice("");
+      setCompletionErrors({});
+      setRescheduleReason("Customer requested");
       setPage(1);
-      setNotice(
+      notify(
         nextStatus === "COMPLETED"
-          ? "Follow-up completed."
-          : "Follow-up rescheduled with one successor action.",
+          ? selectedNextStage === "LOST"
+            ? "Lead moved to Lost."
+            : scheduleMeeting
+              ? "Lead moved to Interested and meeting scheduled."
+              : selectedNextStage === "INTERESTED"
+                ? "Lead moved to Interested."
+                : "Lead moved to Contacted."
+          : "Task rescheduled with one successor action.",
       );
       await Promise.all([load(), refreshSummary()]);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : "Unable to update follow-up.",
+      notify(
+        reason instanceof Error ? reason.message : "Unable to update task.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -287,10 +512,11 @@ export function FollowUpWorkspace() {
       const counts = await apiClient<FollowUpSummary>("/follow-ups/summary");
       setSummary(counts);
     } catch (reason) {
-      setError(
+      notify(
         reason instanceof Error
           ? reason.message
-          : "Unable to refresh follow-up summary.",
+          : "Unable to refresh task summary.",
+        "error",
       );
     }
   }
@@ -300,21 +526,43 @@ export function FollowUpWorkspace() {
     setNextDueAt(businessInputValue(new Date(Date.now() + 86400000)));
     setNextActionText(status === "RESCHEDULED" ? item.nextAction : "");
     setOutcomeNotes(item.remarks ?? "");
+    setContactDate(businessDateKey(new Date()));
+    const previousContactType = item.lead.activities?.[0]?.contactType;
+    const activityType = previousContactType
+      ? CONTACT_TYPES.find((option) => option === previousContactType)
+      : undefined;
+    const followUpContactType =
+      item.type === "Call" ? "Phone Call" : item.type;
+    setContactType(
+      activityType ??
+        CONTACT_TYPES.find((option) => option === followUpContactType) ??
+        "Phone Call",
+    );
+    setCustomerResponse("");
+    setRequirement("");
+    setMeetingChoice("");
+    setCompletionErrors({});
+    setMeetingDate("");
+    setMeetingTime("");
+    setMeetingType("");
+    setSelectedNextStage("");
   }
 
-  const scopes: [Scope, string][] = [
-    ["today", "Today"],
-    ["upcoming", "Upcoming"],
-    ["overdue", "Overdue"],
-    ["completed", "Completed"],
-  ];
+  const completingItem =
+    editing?.status === "COMPLETED"
+      ? items.find((item) => item.id === editing.id)
+      : undefined;
+  const reschedulingItem =
+    editing?.status === "RESCHEDULED"
+      ? items.find((item) => item.id === editing.id)
+      : undefined;
 
   return (
     <main className="lead-workspace follow-up-workspace">
       <header className="workspace-header">
         <div>
           <p className="eyebrow">DAILY SALES ROUTINE</p>
-          <h1>Follow-ups</h1>
+          <h1>Tasks</h1>
           <p className="subtitle">
             Keep customer commitments visible and every open lead scheduled.
           </p>
@@ -324,27 +572,11 @@ export function FollowUpWorkspace() {
             All leads
           </Link>
           <button className="primary" onClick={() => setShowCreate(true)}>
-            + Schedule follow-up
+            + Schedule task
           </button>
         </div>
       </header>
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-          <button onClick={() => setError("")} aria-label="Dismiss error">
-            ×
-          </button>
-        </div>
-      )}
-      {notice && (
-        <div className="workspace-notice" role="status">
-          {notice}
-          <button onClick={() => setNotice("")} aria-label="Dismiss notice">
-            ×
-          </button>
-        </div>
-      )}
-      <section className="follow-up-summary" aria-label="Follow-up summary">
+      <section className="follow-up-summary" aria-label="Task summary">
         {(
           [
             ["today", "Due Today", summary.dueToday],
@@ -368,114 +600,170 @@ export function FollowUpWorkspace() {
           </button>
         ))}
       </section>
-      <div className="follow-up-tabs" role="tablist">
-        {scopes.map(([value, label]) => (
-          <button
-            key={value}
-            className={scope === value ? "active" : ""}
-            role="tab"
-            aria-selected={scope === value}
-            onClick={() => {
-              setPage(1);
-              setStatusFilter("");
-              setScope(value);
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <div className="follow-up-filters">
-        <label className="search-field">
-          <span aria-hidden="true">⌕</span>
-          <input
-            aria-label="Search follow-ups"
-            placeholder="Search lead, phone, BDE, action, or notes"
-            value={search}
-            onChange={(event) => {
-              resetPage();
-              setSearch(event.target.value);
-            }}
-          />
-        </label>
-        <label>
-          Type
-          <select
-            value={typeFilter}
-            onChange={(event) => {
-              resetPage();
-              setTypeFilter(event.target.value);
-            }}
-          >
-            <option value="">All types</option>
-            {TYPES.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Assigned BDE
-          <select
-            value={assignedBdeId}
-            onChange={(event) => {
-              resetPage();
-              setAssignedBdeId(event.target.value);
-            }}
-          >
-            <option value="">All authorized BDEs</option>
-            {assignees.map((assignee) => (
-              <option key={assignee.id} value={assignee.id}>
-                {assignee.fullName}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Status
-          <select
-            value={statusFilter}
-            onChange={(event) => {
-              resetPage();
-              setStatusFilter(event.target.value as FollowUpStatus | "");
-            }}
-          >
-            <option value="">All statuses</option>
-            <option value="PENDING">Pending</option>
-            <option value="COMPLETED">Completed</option>
-            <option value="RESCHEDULED">Rescheduled</option>
-            <option value="CANCELLED">Cancelled</option>
-          </select>
-        </label>
-        <label>
-          From
-          <input
-            type="date"
-            value={from}
-            onChange={(event) => {
-              resetPage();
-              setFrom(event.target.value);
-            }}
-          />
-        </label>
-        <label>
-          To
-          <input
-            type="date"
-            value={to}
-            onChange={(event) => {
-              resetPage();
-              setTo(event.target.value);
-            }}
-          />
-        </label>
+      <label className="search-field follow-up-search">
+        <span aria-hidden="true">⌕</span>
+        <input
+          aria-label="Search tasks"
+          placeholder="Search lead, phone, BDE, action, or notes"
+          value={search}
+          onChange={(event) => {
+            resetPage();
+            setSearch(event.target.value);
+          }}
+        />
+      </label>
+      <div className="follow-up-results-layout">
+        <aside className="follow-up-filters" aria-label="Filter tasks">
+          <h2>Filter Tasks</h2>
+          <div className="follow-up-filter-options">
+            <div className="follow-up-filter-option">
+              <label className="follow-up-filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={enabledFilters.type}
+                  onChange={(event) =>
+                    toggleFilter("type", event.target.checked)
+                  }
+                />
+                Type
+              </label>
+              {enabledFilters.type && (
+                <label className="follow-up-filter-input">
+                  Select type *
+                  <select
+                    required
+                    value={typeFilter}
+                    onChange={(event) => {
+                      resetPage();
+                      setTypeFilter(event.target.value);
+                    }}
+                  >
+                    <option value="">Choose a type</option>
+                    {TYPES.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            <div className="follow-up-filter-option">
+              <label className="follow-up-filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={enabledFilters.assignee}
+                  onChange={(event) =>
+                    toggleFilter("assignee", event.target.checked)
+                  }
+                />
+                Assigned BDE
+              </label>
+              {enabledFilters.assignee && (
+                <label className="follow-up-filter-input">
+                  Select BDE *
+                  <select
+                    required
+                    value={assignedBdeId}
+                    onChange={(event) => {
+                      resetPage();
+                      setAssignedBdeId(event.target.value);
+                    }}
+                  >
+                    <option value="">Choose a BDE</option>
+                    {assignees.map((assignee) => (
+                      <option key={assignee.id} value={assignee.id}>
+                        {assignee.fullName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            <div className="follow-up-filter-option">
+              <label className="follow-up-filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={enabledFilters.status}
+                  onChange={(event) =>
+                    toggleFilter("status", event.target.checked)
+                  }
+                />
+                Status
+              </label>
+              {enabledFilters.status && (
+                <label className="follow-up-filter-input">
+                  Select status *
+                  <select
+                    required
+                    value={statusFilter}
+                    onChange={(event) => {
+                      resetPage();
+                      setStatusFilter(event.target.value as FollowUpStatus | "");
+                    }}
+                  >
+                    <option value="">Choose a status</option>
+                    <option value="PENDING">Pending</option>
+                    <option value="COMPLETED">Completed</option>
+                    <option value="RESCHEDULED">Rescheduled</option>
+                    <option value="CANCELLED">Cancelled</option>
+                  </select>
+                </label>
+              )}
+            </div>
+            <div className="follow-up-filter-option">
+              <label className="follow-up-filter-checkbox">
+                <input
+                  type="checkbox"
+                  checked={enabledFilters.date}
+                  onChange={(event) =>
+                    toggleFilter("date", event.target.checked)
+                  }
+                />
+                Date
+              </label>
+              {enabledFilters.date && (
+                <div className="follow-up-date-range">
+                  <label className="follow-up-filter-input">
+                    From *
+                    <input
+                      required
+                      type="date"
+                      value={from}
+                      onChange={(event) => {
+                        resetPage();
+                        setFrom(event.target.value);
+                      }}
+                    />
+                  </label>
+                  <label className="follow-up-filter-input">
+                    To *
+                    <input
+                      required
+                      type="date"
+                      min={from || undefined}
+                      value={to}
+                      onChange={(event) => {
+                        resetPage();
+                        setTo(event.target.value);
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
         <button
           className="secondary-action follow-up-clear"
           type="button"
           onClick={() => {
             resetPage();
-            setSearch("");
+            setEnabledFilters({
+              type: false,
+              assignee: false,
+              status: false,
+              date: false,
+            });
             setTypeFilter("");
             setAssignedBdeId("");
             setStatusFilter("");
@@ -485,20 +773,20 @@ export function FollowUpWorkspace() {
         >
           Clear filters
         </button>
-      </div>
-      <section className="follow-up-list">
+        </aside>
+        <section className="follow-up-list">
         {!loading && items.length > 0 && (
           <div className="follow-up-list-header" aria-hidden="true">
             <span>Due date</span>
             <span>Lead / customer</span>
             <span>Assigned BDE</span>
-            <span>Follow-up</span>
+            <span>Task</span>
             <span>Actions</span>
           </div>
         )}
         {loading && (
           <p className="dashboard-loading" role="status">
-            Loading follow-ups...
+            Loading tasks...
           </p>
         )}
         {!loading &&
@@ -567,76 +855,404 @@ export function FollowUpWorkspace() {
                     )}
                   </div>
                 )}
-                {editing?.id === item.id && (
-                  <form
-                    className="follow-up-edit"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void updateFollowUp(item);
-                    }}
-                  >
-                    <p className="follow-up-edit-guidance">
-                      {editing.status === "COMPLETED"
-                        ? "Complete this follow-up and record its outcome."
-                        : "Close this follow-up and schedule one successor follow-up."}
-                    </p>
-                    {!["WON", "LOST"].includes(item.lead.stage) && (
-                      <>
-                        <label>
-                          Next action for open lead *
-                          <input
-                            required
-                            value={nextActionText}
-                            onChange={(event) =>
-                              setNextActionText(event.target.value)
-                            }
-                          />
-                        </label>
-                        <label>
-                          Next follow-up date and time *
-                          <input
-                            required
-                            type="datetime-local"
-                            min={businessInputValue(new Date())}
-                            value={nextDueAt}
-                            onChange={(event) => setNextDueAt(event.target.value)}
-                          />
-                        </label>
-                      </>
-                    )}
-                    <label className="follow-up-outcome">
-                      Outcome / notes
-                      <textarea
-                        rows={2}
-                        value={outcomeNotes}
-                        onChange={(event) => setOutcomeNotes(event.target.value)}
-                      />
-                    </label>
-                    <button className="primary" disabled={busy}>
-                      {busy
-                        ? "Saving..."
-                        : `Save ${editing.status.toLowerCase()}`}
-                    </button>
-                    <button
-                      type="button"
-                      className="cancel-stage"
-                      onClick={() => setEditing(null)}
-                    >
-                      Cancel
-                    </button>
-                  </form>
-                )}
               </article>
             );
           })}
         {!loading && !error && items.length === 0 && (
-          <div className="empty-list">No follow-ups match these filters.</div>
+          <div className="empty-list">No tasks match these filters.</div>
         )}
-      </section>
+        </section>
+      </div>
+      {reschedulingItem && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEditing(null);
+          }}
+        >
+          <section
+            className="lead-modal follow-up-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reschedule-follow-up-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">UPDATE COMMITMENT</p>
+                <h2 id="reschedule-follow-up-title">Reschedule task</h2>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Close"
+                onClick={() => setEditing(null)}
+              >
+                ×
+              </button>
+            </div>
+            <form
+              className="lead-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void updateFollowUp(reschedulingItem);
+              }}
+            >
+              <label className="form-wide">
+                Reschedule reason *
+                <select
+                  required
+                  value={rescheduleReason}
+                  onChange={(event) =>
+                    setRescheduleReason(
+                      event.target.value as (typeof RESCHEDULE_REASONS)[number],
+                    )
+                  }
+                >
+                  {RESCHEDULE_REASONS.map((reason) => (
+                    <option key={reason} value={reason}>
+                      {reason}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="form-wide">
+                Remarks (optional)
+                <textarea
+                  rows={2}
+                  value={outcomeNotes}
+                  onChange={(event) => setOutcomeNotes(event.target.value)}
+                />
+              </label>
+              {!["WON", "LOST"].includes(reschedulingItem.lead.stage) && (
+                <>
+                  <label className="form-wide">
+                    Next action *
+                    <input
+                      required
+                      value={nextActionText}
+                      onChange={(event) =>
+                        setNextActionText(event.target.value)
+                      }
+                    />
+                  </label>
+                  <ClockDateTimePicker
+                    className="form-wide"
+                    label="Next task"
+                    required
+                    minValue={businessInputValue(new Date())}
+                    value={nextDueAt}
+                    onChange={setNextDueAt}
+                  />
+                </>
+              )}
+              <div className="form-footer">
+                <p>This reason and any remarks are saved on the rescheduled task.</p>
+                <button className="primary" disabled={busy}>
+                  {busy ? "Saving..." : "Reschedule"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+      {completingItem && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEditing(null);
+          }}
+        >
+          <section
+            className="lead-modal follow-up-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="complete-follow-up-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">CUSTOMER CONTACT</p>
+                <h2 id="complete-follow-up-title">Complete call</h2>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Close"
+                onClick={() => setEditing(null)}
+              >
+                ×
+              </button>
+            </div>
+            <form
+              className="lead-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void updateFollowUp(completingItem);
+              }}
+            >
+              <label>
+                Lead Name
+                <input disabled value={completingItem.lead.customerName} />
+              </label>
+              <label>
+                Contact Type
+                <input disabled value={contactType} />
+              </label>
+              <label>
+                Contact Date
+                <input disabled type="date" value={contactDate} />
+              </label>
+              <label>
+                Next Action *
+                <select
+                  value={selectedNextStage}
+                  aria-invalid={!!completionErrors.nextAction}
+                  onChange={(event) => {
+                    const stage = event.target.value as NextLeadStage | "";
+                    setSelectedNextStage(stage);
+                    setMeetingChoice("");
+                    setMeetingDate("");
+                    setMeetingTime("");
+                    setMeetingType("");
+                    setCompletionErrors({});
+                  }}
+                >
+                  <option value="">Choose next action</option>
+                  <option value="INTERESTED">Interested</option>
+                  <option value="LOST">Not Interested</option>
+                  <option value="CONTACTED">Decision Pending</option>
+                </select>
+                {completionErrors.nextAction && (
+                  <small className="field-error">
+                    {completionErrors.nextAction}
+                  </small>
+                )}
+              </label>
+              {selectedNextStage !== "LOST" && (
+                <>
+                  <label className="form-wide">
+                    Next Customer Response *
+                    <textarea
+                      aria-invalid={!!completionErrors.customerResponse}
+                      rows={3}
+                      value={customerResponse}
+                      onChange={(event) => {
+                        setCustomerResponse(event.target.value);
+                        setCompletionErrors((errors) => ({
+                          ...errors,
+                          customerResponse: undefined,
+                        }));
+                      }}
+                    />
+                    {completionErrors.customerResponse && (
+                      <small className="field-error">
+                        {completionErrors.customerResponse}
+                      </small>
+                    )}
+                  </label>
+                  <label className="form-wide">
+                    Requirements *
+                    <textarea
+                      aria-invalid={!!completionErrors.requirement}
+                      rows={2}
+                      value={requirement}
+                      onChange={(event) => {
+                        setRequirement(event.target.value);
+                        setCompletionErrors((errors) => ({
+                          ...errors,
+                          requirement: undefined,
+                        }));
+                      }}
+                    />
+                    {completionErrors.requirement && (
+                      <small className="field-error">
+                        {completionErrors.requirement}
+                      </small>
+                    )}
+                  </label>
+                </>
+              )}
+              <label className="form-wide">
+                Remarks
+                <textarea
+                  rows={2}
+                  value={outcomeNotes}
+                  onChange={(event) => setOutcomeNotes(event.target.value)}
+                />
+              </label>
+              {selectedNextStage === "INTERESTED" && (
+                <div className="form-wide meeting-schedule-control">
+                  <span>Schedule a meeting?</span>
+                  <div className="meeting-choice-buttons">
+                    <button
+                      className={
+                        meetingChoice === "yes"
+                          ? "primary"
+                          : "secondary-action"
+                      }
+                      type="button"
+                      aria-pressed={meetingChoice === "yes"}
+                      onClick={() => {
+                        setMeetingChoice("yes");
+                        setCompletionErrors((errors) => ({
+                          ...errors,
+                          meetingChoice: undefined,
+                        }));
+                      }}
+                    >
+                      Yes
+                    </button>
+                    <button
+                      className={
+                        meetingChoice === "no"
+                          ? "primary"
+                          : "secondary-action"
+                      }
+                      type="button"
+                      aria-pressed={meetingChoice === "no"}
+                      onClick={() => {
+                        setMeetingChoice("no");
+                        setMeetingDate("");
+                        setMeetingTime("");
+                        setMeetingType("");
+                        setCompletionErrors((errors) => ({
+                          ...errors,
+                          meetingChoice: undefined,
+                          meetingDate: undefined,
+                          meetingTime: undefined,
+                          meetingType: undefined,
+                        }));
+                      }}
+                    >
+                      No
+                    </button>
+                  </div>
+                  {completionErrors.meetingChoice && (
+                    <small className="field-error">
+                      {completionErrors.meetingChoice}
+                    </small>
+                  )}
+                </div>
+              )}
+              <div className="form-footer">
+                <p>Save the contact outcome and update this lead.</p>
+                <div>
+                  <button
+                    className="secondary-action"
+                    disabled={busy}
+                    onClick={() => setEditing(null)}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button className="primary" disabled={busy}>
+                    {busy ? "Saving..." : "Save"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </section>
+          {selectedNextStage === "INTERESTED" &&
+            meetingChoice === "yes" && (
+              <aside
+                className="meeting-side-drawer is-open"
+                role="dialog"
+                aria-modal="false"
+                aria-labelledby="schedule-interested-meeting-title"
+              >
+                <fieldset>
+                  <div className="modal-heading">
+                    <div>
+                      <p className="eyebrow">INTERESTED LEAD</p>
+                      <h2 id="schedule-interested-meeting-title">
+                        Schedule meeting
+                      </h2>
+                    </div>
+                  </div>
+                  <div className="lead-form">
+                    <label>
+                      Meeting Date *
+                      <input
+                        aria-invalid={!!completionErrors.meetingDate}
+                        type="date"
+                        min={businessDateKey(new Date())}
+                        value={meetingDate}
+                        onChange={(event) => {
+                          setMeetingDate(event.target.value);
+                          setCompletionErrors((errors) => ({
+                            ...errors,
+                            meetingDate: undefined,
+                          }));
+                        }}
+                      />
+                      {completionErrors.meetingDate && (
+                        <small className="field-error">
+                          {completionErrors.meetingDate}
+                        </small>
+                      )}
+                    </label>
+                    <label>
+                      Meeting Time *
+                      <input
+                        aria-invalid={!!completionErrors.meetingTime}
+                        type="time"
+                        value={meetingTime}
+                        onChange={(event) => {
+                          setMeetingTime(event.target.value);
+                          setCompletionErrors((errors) => ({
+                            ...errors,
+                            meetingTime: undefined,
+                          }));
+                        }}
+                      />
+                      {completionErrors.meetingTime && (
+                        <small className="field-error">
+                          {completionErrors.meetingTime}
+                        </small>
+                      )}
+                    </label>
+                    <label>
+                      Meeting type *
+                      <select
+                        aria-invalid={!!completionErrors.meetingType}
+                        value={meetingType}
+                        onChange={(event) => {
+                          setMeetingType(event.target.value);
+                          setCompletionErrors((errors) => ({
+                            ...errors,
+                            meetingType: undefined,
+                          }));
+                        }}
+                      >
+                        <option value="">Choose meeting type</option>
+                        {MEETING_TYPES.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                      {completionErrors.meetingType && (
+                        <small className="field-error">
+                          {completionErrors.meetingType}
+                        </small>
+                      )}
+                    </label>
+                  </div>
+                  <div className="form-footer">
+                    <p>
+                      Meeting details are saved with the lead stage update.
+                    </p>
+                  </div>
+                </fieldset>
+              </aside>
+            )}
+        </div>
+      )}
       {!loading && !error && (
-        <nav className="pagination" aria-label="Follow-up pagination">
+        <nav className="pagination" aria-label="Task pagination">
           <span>
-            {items.length} {items.length === 1 ? "follow-up" : "follow-ups"} ·
+            {items.length} {items.length === 1 ? "task" : "tasks"} ·
             Page {page} of {totalPages}
           </span>
           <div className="pagination-controls">
@@ -677,7 +1293,7 @@ export function FollowUpWorkspace() {
             <div className="modal-heading">
               <div>
                 <p className="eyebrow">CUSTOMER COMMITMENT</p>
-                <h2 id="follow-up-title">Schedule follow-up</h2>
+                <h2 id="follow-up-title">Schedule task</h2>
               </div>
               <button
                 className="modal-close"
@@ -707,7 +1323,7 @@ export function FollowUpWorkspace() {
                 )}
               </label>
               <label>
-                Follow-up type
+                Task type
                 <select
                   value={type}
                   onChange={(event) => setType(event.target.value)}
@@ -717,15 +1333,13 @@ export function FollowUpWorkspace() {
                   ))}
                 </select>
               </label>
-              <label>
-                Due date and time *
-                <input
-                  required
-                  type="datetime-local"
-                  value={dueAt}
-                  onChange={(event) => setDueAt(event.target.value)}
-                />
-              </label>
+              <ClockDateTimePicker
+                className="form-wide"
+                label="Due"
+                required
+                value={dueAt}
+                onChange={setDueAt}
+              />
               <label className="form-wide">
                 Next action *
                 <input

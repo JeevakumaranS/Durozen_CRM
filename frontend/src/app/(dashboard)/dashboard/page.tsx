@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api-client";
+import { notify } from "../../../lib/notifications";
 
 type DashboardSummary = {
   metrics: {
@@ -46,13 +47,14 @@ export default function Dashboard() {
   useEffect(() => {
     apiClient<DashboardSummary>("/dashboard/summary")
       .then(setSummary)
-      .catch((reason: unknown) =>
-        setError(
+      .catch((reason: unknown) => {
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load dashboard.",
-        ),
-      );
+            : "Unable to load dashboard.";
+        setError(message);
+        notify(message, "error");
+      });
   }, []);
 
   const metrics = summary
@@ -88,11 +90,6 @@ export default function Dashboard() {
             + Add lead
           </Link>
         </header>
-        {error && (
-          <div className="workspace-notice" role="alert">
-            {error}
-          </div>
-        )}
         {!summary && !error && (
           <div className="dashboard-loading">Loading sales activity...</div>
         )}
@@ -132,7 +129,7 @@ export default function Dashboard() {
                 <strong>{money(summary.revenue.month)}</strong>
               </div>
               <div>
-                <span>Open pipeline value</span>
+                <span>Open Sales Pipeline value</span>
                 <strong>{money(summary.revenue.pipeline)}</strong>
               </div>
             </section>
@@ -140,11 +137,11 @@ export default function Dashboard() {
               <article className="panel pipeline-overview">
                 <div className="panel-head">
                   <div>
-                    <h2>Pipeline overview</h2>
+                    <h2>Sales Pipeline overview</h2>
                     <p>Lead count and estimated value by stage</p>
                   </div>
                   <Link className="text-btn" href="/pipeline">
-                    View pipeline →
+                    View Sales Pipeline →
                   </Link>
                 </div>
                 <div className="bars">
@@ -182,8 +179,8 @@ export default function Dashboard() {
                     <h2>Follow-up attention</h2>
                     <p>Work due today and past due</p>
                   </div>
-                  <Link className="text-btn" href="/follow-ups">
-                    Open follow-ups →
+                  <Link className="text-btn" href="/tasks">
+                    Open tasks →
                   </Link>
                 </div>
                 <div className="attention-count">

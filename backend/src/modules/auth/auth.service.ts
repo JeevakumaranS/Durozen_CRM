@@ -1,7 +1,10 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import * as bcrypt from "bcrypt";
 import { sign } from "jsonwebtoken";
-import { getJwtSecret } from "../../config/jwt.config";
+import {
+  getJwtExpirationMinutes,
+  getJwtSecret,
+} from "../../config/jwt.config";
 import { PrismaService } from "../../prisma/prisma.service";
 import { LoginDto } from "./dto/login.dto";
 @Injectable()
@@ -18,10 +21,9 @@ export class AuthService {
         sub: user.id,
         role: user.role,
         name: user.fullName,
-        tokenVersion: user.tokenVersion,
       },
       getJwtSecret(),
-      { expiresIn: "8h" },
+      { expiresIn: `${getJwtExpirationMinutes()}m` },
     );
     return {
       accessToken,
@@ -48,11 +50,7 @@ export class AuthService {
     };
   }
 
-  async logout(userId: string) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { tokenVersion: { increment: 1 } },
-    });
+  logout() {
     return { message: "Signed out" };
   }
 
@@ -72,7 +70,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash, tokenVersion: { increment: 1 } },
+      data: { passwordHash },
     });
     return { message: "Password updated" };
   }

@@ -5,14 +5,13 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { apiClient, logoutAndRedirect } from "../../lib/api-client";
 import { AuthUser, getAccessToken, setAuthUser } from "../../lib/auth";
+import { notify } from "../../lib/notifications";
 
 const adminNavigation = [
   ["Dashboard", "/dashboard"],
   ["Leads", "/leads"],
-  ["Pipeline", "/pipeline"],
-  ["Follow-ups", "/follow-ups"],
+  ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["Meetings", "/meetings"],
   ["Proposals", "/proposals"],
   ["Negotiations", "/negotiations"],
   ["Customers", "/customers"],
@@ -24,7 +23,7 @@ const bdeRoutes = [
   "/dashboard",
   "/leads",
   "/pipeline",
-  "/follow-ups",
+  "/tasks",
   "/activities",
   "/meetings",
   "/proposals",
@@ -35,7 +34,7 @@ const managerRoutes = [
   "/dashboard",
   "/leads",
   "/pipeline",
-  "/follow-ups",
+  "/tasks",
   "/proposals",
   "/performance",
   "/reports",
@@ -43,8 +42,8 @@ const managerRoutes = [
 const managerNavigation = [
   ["Dashboard", "/dashboard"],
   ["Leads", "/leads"],
-  ["Pipeline", "/pipeline"],
-  ["Follow-ups", "/follow-ups"],
+  ["Sales Pipeline", "/pipeline"],
+  ["Tasks", "/tasks"],
   ["Proposals", "/proposals"],
   ["Performance", "/performance"],
   ["Reports", "/reports"],
@@ -52,10 +51,8 @@ const managerNavigation = [
 const bdeNavigation = [
   ["Dashboard", "/dashboard"],
   ["Leads", "/leads"],
-  ["Pipeline", "/pipeline"],
-  ["Follow-ups", "/follow-ups"],
+  ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["Meetings", "/meetings"],
   ["Proposals", "/proposals"],
   ["Customers", "/customers"],
   ["Performance", "/performance"],
@@ -67,9 +64,19 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const isActivitySection =
+    pathname.startsWith("/activities") ||
+    pathname === "/tasks" ||
+    pathname === "/meetings";
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [activitiesExpanded, setActivitiesExpanded] =
+    useState(isActivitySection);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (isActivitySection) setActivitiesExpanded(true);
+  }, [isActivitySection]);
 
   useEffect(() => {
     setLoading(true);
@@ -103,7 +110,10 @@ export default function DashboardLayout({
         setLoading(false);
       })
       .catch((reason: unknown) => {
-        if (reason instanceof Error) setError(reason.message);
+        const message =
+          reason instanceof Error ? reason.message : "Unable to verify access.";
+        setError(message);
+        notify(message, "error");
         setLoading(false);
       });
   }, [pathname]);
@@ -111,13 +121,7 @@ export default function DashboardLayout({
   if (loading) {
     return <main className="dashboard-loading">Verifying access...</main>;
   }
-  if (error) {
-    return (
-      <main className="dashboard-loading" role="alert">
-        {error}
-      </main>
-    );
-  }
+  if (error) return null;
   if (!user) return null;
 
   const navigationForRole =
@@ -136,6 +140,62 @@ export default function DashboardLayout({
         </Link>
         <nav aria-label="Main navigation">
           {navigationForRole.map(([label, href]) => {
+              if (label === "Activities") {
+                const activityLinks = [
+                  ["Tasks", "/tasks"],
+                  ["Meetings", "/meetings"],
+                  ["Calls & Msg", "/activities/calls"],
+                ];
+                return (
+                  <div className="sidebar-activity-group" key={href}>
+                    <button
+                      aria-expanded={activitiesExpanded}
+                      className={`sidebar-activity-toggle${isActivitySection ? " selected" : ""}`}
+                      onClick={() =>
+                        setActivitiesExpanded((expanded) => !expanded)
+                      }
+                      title="Activities"
+                      type="button"
+                    >
+                      <span className="sidebar-activity-title">
+                        Activities
+                      </span>
+                      <span aria-hidden="true" className="sidebar-activity-chevron">
+                        {activitiesExpanded ? "⌃" : "+"}
+                      </span>
+                    </button>
+                    {activitiesExpanded && (
+                      <div className="sidebar-activity-children">
+                        {activityLinks.map(([childLabel, childHref]) => {
+                          const childSelected =
+                            pathname === childHref ||
+                            pathname.startsWith(`${childHref}/`);
+                          const iconPath =
+                            childLabel === "Tasks"
+                              ? "M4 3.5h12v13H4z M7 7h.01 M9 7h4 M7 10h.01 M9 10h4 M7 13h.01 M9 13h4"
+                              : childLabel === "Meetings"
+                                ? "M3.5 5.5h13v11h-13z M6.5 3.5v4 M13.5 3.5v4 M3.5 8.5h13"
+                                : "M6.2 3.8 8.4 6l-1.5 2.1a12 12 0 0 0 5 5l2.1-1.5 2.2 2.2-1.3 2.7c-.3.6-1 .9-1.7.8A14.5 14.5 0 0 1 2.7 4.8c-.1-.7.2-1.4.8-1.7z";
+                          return (
+                            <Link
+                              aria-current={childSelected ? "page" : undefined}
+                              className={childSelected ? "selected" : ""}
+                              href={childHref}
+                              key={childHref}
+                              title={childLabel}
+                            >
+                              <svg aria-hidden="true" viewBox="0 0 20 20">
+                                <path d={iconPath} />
+                              </svg>
+                              {childLabel}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
               const selected =
                 pathname === href ||
                 (href !== "/dashboard" && pathname.startsWith(`${href}/`));

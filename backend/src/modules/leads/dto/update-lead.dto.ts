@@ -2,6 +2,7 @@ import {
   IsDateString,
   IsEmail,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -12,6 +13,7 @@ import {
 import { LeadStage } from "./create-lead.dto";
 
 export class UpdateLeadDto {
+  @IsOptional() @IsDateString() leadDate?: string;
   @IsOptional() @IsString() customerName?: string;
   @IsOptional() @IsString() businessName?: string;
   @IsOptional() @Matches(/^[+0-9() -]{7,30}$/) mobileNumber?: string;
@@ -23,12 +25,13 @@ export class UpdateLeadDto {
   @IsOptional() @IsEnum(LeadStage) stage?: LeadStage;
   @IsOptional() @IsString() nextAction?: string;
   @IsOptional() @IsDateString() followUpAt?: string;
+  @IsOptional() @IsString() remarks?: string;
   @IsOptional() @IsString() requirement?: string;
   @IsOptional() @IsEnum(["HOT", "WARM", "COLD"]) priority?:
     | "HOT"
     | "WARM"
     | "COLD";
-  @IsOptional() @IsNumber() @Min(0) estimatedBudget?: number;
+  @IsOptional() @IsNumber() @Min(0) estimatedBudget?: number | null;
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -53,4 +56,20 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsString()
   lostReason?: string;
+
+  @IsOptional()
+  @IsDateString()
+  contactDate?: string;
+
+  @IsOptional()
+  @IsIn(["Phone Call", "WhatsApp", "Email", "Direct Meeting", "Other"])
+  contactType?: string;
+
+  @IsOptional()
+  @IsString()
+  customerResponse?: string;
+
+  @IsOptional()
+  @IsString()
+  expectedTimeline?: string;
 }

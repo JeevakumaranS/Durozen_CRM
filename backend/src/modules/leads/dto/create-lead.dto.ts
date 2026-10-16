@@ -20,6 +20,7 @@ export enum LeadStage {
   LOST = "LOST",
 }
 export class CreateLeadDto {
+  @IsOptional() @IsDateString() leadDate?: string;
   @IsString() customerName!: string;
   @IsOptional() @IsString() businessName?: string;
   @Matches(/^[+0-9() -]{7,30}$/) mobileNumber!: string;
@@ -30,10 +31,18 @@ export class CreateLeadDto {
   @IsUUID() assignedBdeId!: string;
   @IsString() nextAction!: string;
   @IsDateString() followUpAt!: string;
+  @IsOptional() @IsString() remarks?: string;
   @IsOptional() @IsString() requirement?: string;
   @IsOptional() @IsEnum(["HOT", "WARM", "COLD"]) priority?:
     | "HOT"
     | "WARM"
     | "COLD";
   @IsOptional() @IsNumber() @Min(0) estimatedBudget?: number;
+  @IsOptional() @IsEnum(LeadStage) stage?: LeadStage;
+  @IsOptional() @IsNumber() @Min(0) finalDealValue?: number;
+  @IsOptional() @IsString() wonService?: string;
+  @IsOptional() @IsString() paymentStatus?: string;
+  @IsOptional() @IsDateString() expectedStartDate?: string;
+  @IsOptional() @IsString() wonRemarks?: string;
+  @IsOptional() @IsString() lostReason?: string;
 }

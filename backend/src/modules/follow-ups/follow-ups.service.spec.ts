@@ -34,7 +34,7 @@ test("lists follow-ups with assigned-BDE scope and requested filters", async () 
   const conditions = (
     query as { where: { AND: Array<Record<string, unknown>> } }
   ).where.AND;
-  assert.equal(conditions.length, 6);
+  assert.equal(conditions.length, 7);
   assert.deepEqual(conditions[0], { lead: { assignedBdeId: bde.sub } });
   assert.ok(conditions.some((condition) => "OR" in condition));
 });
@@ -204,12 +204,12 @@ test("a concurrent repeat transition cannot create a second successor", async ()
     leadId: "lead-1",
     meetingId: null,
     status: FollowUpStatus.PENDING,
-    dueAt: new Date("2026-10-13T10:00:00Z"),
+    dueAt: new Date(Date.now() - 86400000),
     nextAction: "Call the customer",
     remarks: null,
     lead: {
       stage: LeadStage.CONTACTED,
-      followUpAt: new Date("2026-10-13T10:00:00Z"),
+      followUpAt: new Date(Date.now() - 86400000),
       nextAction: "Call the customer",
     },
   };
@@ -232,7 +232,7 @@ test("a concurrent repeat transition cannot create a second successor", async ()
       existing.id,
       {
         status: FollowUpStatus.RESCHEDULED,
-        dueAt: "2026-10-14T10:00:00Z",
+        dueAt: new Date(Date.now() + 86400000).toISOString(),
         nextAction: "Call the customer again",
       },
       bde,
@@ -288,13 +288,13 @@ test("rescheduling creates one successor and updates the lead next action", asyn
     leadId: "lead-1",
     meetingId: "meeting-1",
     status: FollowUpStatus.PENDING,
-    dueAt: new Date("2026-10-13T10:00:00Z"),
+    dueAt: new Date(Date.now() - 86400000),
     nextAction: "Call the customer",
     remarks: null,
     type: "Call",
     lead: {
       stage: LeadStage.CONTACTED,
-      followUpAt: new Date("2026-10-13T10:00:00Z"),
+      followUpAt: new Date(Date.now() - 86400000),
       nextAction: "Call the customer",
     },
   };
@@ -323,8 +323,9 @@ test("rescheduling creates one successor and updates the lead next action", asyn
     existing.id,
     {
       status: FollowUpStatus.RESCHEDULED,
-      dueAt: "2026-10-14T10:00:00Z",
+      dueAt: new Date(Date.now() + 86400000).toISOString(),
       nextAction: "Call the customer again",
+      rescheduleReason: "Customer unavailable",
       remarks: "Customer requested another day.",
     },
     bde,
@@ -335,4 +336,303 @@ test("rescheduling creates one successor and updates the lead next action", asyn
   assert.equal(successor?.meetingId, "meeting-1");
   assert.equal(successor?.remarks, undefined);
   assert.equal(leadUpdate?.nextAction, "Call the customer again");
+});
+
+test("rescheduling requires a reason before changing the follow-up", async () => {
+  let transactionCalled = false;
+  const service = new FollowUpsService({
+    followUp: {
+      findFirst: async () => ({
+        id: "follow-up-1",
+        status: FollowUpStatus.PENDING,
+        leadId: "lead-1",
+        lead: {
+          stage: LeadStage.CONTACTED,
+          followUpAt: new Date(Date.now() - 86400000),
+          nextAction: "Call the customer",
+        },
+      }),
+    },
+    $transaction: async () => {
+      transactionCalled = true;
+    },
+  } as unknown as PrismaService);
+
+  await assert.rejects(
+    service.update(
+      "follow-up-1",
+      {
+        status: FollowUpStatus.RESCHEDULED,
+        dueAt: new Date(Date.now() + 86400000).toISOString(),
+        nextAction: "Call the customer again",
+      },
+      bde,
+    ),
+    BadRequestException,
+  );
+  assert.equal(transactionCalled, false);
+});
+
+test("completing a follow-up records customer contact details and updates lead details", async () => {
+  let activityData: Record<string, unknown> | undefined;
+  const leadUpdates: Record<string, unknown>[] = [];
+  const existing = {
+    id: "follow-up-1",
+    leadId: "lead-1",
+    meetingId: null,
+    status: FollowUpStatus.PENDING,
+    dueAt: new Date(Date.now() - 86400000),
+    nextAction: "Call the customer",
+    remarks: null,
+    type: "Call",
+    lead: {
+      stage: LeadStage.CONTACTED,
+      followUpAt: new Date(Date.now() - 86400000),
+      nextAction: "Call the customer",
+    },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+    $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
+      operation({
+        followUp: {
+          updateMany: async () => ({ count: 1 }),
+          create: async () => undefined,
+          findUniqueOrThrow: async () => ({ id: existing.id }),
+        },
+        activity: {
+          create: async (args: { data: Record<string, unknown> }) => {
+            activityData = args.data;
+          },
+        },
+        lead: {
+          update: async (args: { data: Record<string, unknown> }) => {
+            leadUpdates.push(args.data);
+            return {
+              id: existing.leadId,
+              stage: args.data.stage ?? existing.lead.stage,
+            };
+          },
+        },
+      }),
+  } as unknown as PrismaService);
+
+  await service.update(
+    existing.id,
+    {
+      status: FollowUpStatus.COMPLETED,
+      dueAt: new Date(Date.now() + 86400000).toISOString(),
+      nextAction: "Interested",
+      contactDate: "2026-10-15T00:00:00.000Z",
+      contactType: "WhatsApp",
+      customerResponse: "Interested in the proposal",
+      nextStage: LeadStage.INTERESTED,
+      requirement: "CRM setup",
+      customerBudget: 125000,
+      expectedTimeline: "Next month",
+      remarks: "Send pricing details",
+    },
+    bde,
+  );
+
+  assert.equal(activityData?.type, "QUALIFICATION");
+  assert.equal(activityData?.contactType, "WhatsApp");
+  assert.equal(activityData?.customerResponse, "Interested in the proposal");
+  assert.equal(activityData?.expectedTimeline, "Next month");
+  assert.equal(
+    leadUpdates.some((update) => update.nextAction === "Interested"),
+    true,
+  );
+  assert.equal(leadUpdates.at(-1)?.requirement, "CRM setup");
+  assert.equal(leadUpdates.at(-1)?.estimatedBudget, 125000);
+  assert.equal(leadUpdates.at(-1)?.remarks, "Send pricing details");
+  assert.equal(leadUpdates.at(-1)?.stage, LeadStage.INTERESTED);
+});
+
+test("requires requirements for Interested and Decision Pending completions", async () => {
+  const existing = {
+    id: "follow-up-1",
+    status: FollowUpStatus.PENDING,
+    leadId: "lead-1",
+    lead: { stage: LeadStage.CONTACTED },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+  } as unknown as PrismaService);
+
+  await assert.rejects(
+    service.update(
+      existing.id,
+      {
+        status: FollowUpStatus.COMPLETED,
+        contactDate: new Date().toISOString(),
+        contactType: "Phone Call",
+        customerResponse: "Interested",
+        nextStage: LeadStage.INTERESTED,
+      },
+      bde,
+    ),
+    BadRequestException,
+  );
+});
+
+test("Not Interested completion moves the lead to Lost without follow-up details", async () => {
+  let finalLeadUpdate: Record<string, unknown> | undefined;
+  let cancelledCallMessages = false;
+  const existing = {
+    id: "follow-up-1",
+    leadId: "lead-1",
+    meetingId: null,
+    status: FollowUpStatus.PENDING,
+    dueAt: new Date(),
+    nextAction: "Call the customer",
+    remarks: null,
+    type: "Proposal Follow-up",
+    lead: {
+      stage: LeadStage.CONTACTED,
+      followUpAt: new Date(),
+      nextAction: "Call the customer",
+    },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+    $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
+      operation({
+        followUp: {
+          updateMany: async () => ({ count: 1 }),
+          findUniqueOrThrow: async () => ({ id: existing.id }),
+        },
+        activity: { create: async () => undefined },
+        lead: {
+          update: async (args: { data: Record<string, unknown> }) => {
+            finalLeadUpdate = args.data;
+            return { id: existing.leadId, stage: args.data.stage };
+          },
+        },
+        callMessage: {
+          updateMany: async () => {
+            cancelledCallMessages = true;
+            return { count: 1 };
+          },
+        },
+      }),
+  } as unknown as PrismaService);
+
+  await service.update(
+    existing.id,
+    {
+      status: FollowUpStatus.COMPLETED,
+      contactDate: new Date().toISOString(),
+      contactType: "Phone Call",
+      nextStage: LeadStage.LOST,
+    },
+    bde,
+  );
+
+  assert.equal(finalLeadUpdate?.stage, LeadStage.LOST);
+  assert.equal(finalLeadUpdate?.lostReason, "Not Interested");
+  assert.equal(finalLeadUpdate?.nextAction, null);
+  assert.equal(finalLeadUpdate?.followUpAt, null);
+  assert.equal(cancelledCallMessages, true);
+});
+
+test("completing an interested follow-up with meeting details creates one meeting and linked follow-up", async () => {
+  let meetingData: Record<string, unknown> | undefined;
+  let meetingActivity: Record<string, unknown> | undefined;
+  let meetingFollowUp: Record<string, unknown> | undefined;
+  const leadUpdates: Record<string, unknown>[] = [];
+  const existing = {
+    id: "follow-up-1",
+    leadId: "lead-1",
+    meetingId: null,
+    status: FollowUpStatus.PENDING,
+    dueAt: new Date(Date.now() - 86400000),
+    nextAction: "Call the customer",
+    remarks: null,
+    type: "Call",
+    lead: {
+      stage: LeadStage.CONTACTED,
+      followUpAt: new Date(Date.now() - 86400000),
+      nextAction: "Call the customer",
+    },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+    $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
+      operation({
+        followUp: {
+          updateMany: async () => ({ count: 1 }),
+          create: async (args: { data: Record<string, unknown> }) => {
+            meetingFollowUp = args.data;
+          },
+          findUniqueOrThrow: async () => ({ id: existing.id }),
+        },
+        meeting: {
+          create: async (args: { data: Record<string, unknown> }) => {
+            meetingData = args.data;
+            return {
+              id: "meeting-1",
+              type: args.data.type,
+              meetingAt: args.data.meetingAt,
+            };
+          },
+        },
+        activity: {
+          create: async (args: { data: Record<string, unknown> }) => {
+            if (args.data.type === "MEETING_SCHEDULED") {
+              meetingActivity = args.data;
+            }
+          },
+        },
+        lead: {
+          update: async (args: { data: Record<string, unknown> }) => {
+            leadUpdates.push(args.data);
+            return {
+              id: existing.leadId,
+              stage: args.data.stage ?? existing.lead.stage,
+            };
+          },
+        },
+      }),
+  } as unknown as PrismaService);
+
+  const meetingAt = new Date(Date.now() + 86400000);
+  await service.update(
+    existing.id,
+    {
+      status: FollowUpStatus.COMPLETED,
+      dueAt: meetingAt.toISOString(),
+      nextAction: "Attend scheduled meeting",
+      contactDate: new Date().toISOString(),
+      contactType: "Phone Call",
+      customerResponse: "Interested in a product demo",
+      requirement: "Product demonstration",
+      nextStage: LeadStage.INTERESTED,
+      scheduleMeeting: true,
+      meetingAt: meetingAt.toISOString(),
+      meetingType: "Product Demo",
+      meetingParticipants: "Customer team",
+    },
+    bde,
+  );
+
+  assert.equal(meetingData?.leadId, existing.leadId);
+  assert.equal(meetingData?.type, "Product Demo");
+  assert.equal(meetingData?.participants, "Customer team");
+  assert.equal(meetingActivity?.meetingId, "meeting-1");
+  assert.equal(meetingFollowUp?.meetingId, "meeting-1");
+  assert.equal(
+    (meetingFollowUp?.dueAt as Date).getTime(),
+    meetingAt.getTime(),
+  );
+  assert.equal(meetingFollowUp?.nextAction, "Attend scheduled meeting");
+  assert.equal(leadUpdates.at(-1)?.stage, LeadStage.INTERESTED);
+  assert.equal(
+    (leadUpdates.find((update) => update.followUpAt)?.followUpAt as Date).getTime(),
+    meetingAt.getTime(),
+  );
+  assert.equal(
+    leadUpdates.find((update) => update.nextAction)?.nextAction,
+    "Attend scheduled meeting",
+  );
 });

@@ -3,8 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { LeadStage } from "@prisma/client";
-import { randomUUID } from "node:crypto";
+import { LeadStage, Prisma } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -31,6 +30,35 @@ export class ProposalsService {
     });
   }
 
+  async nextNumber(user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const year = new Date().getFullYear();
+    return {
+      proposalNumber: await this.nextProposalNumber(year),
+      year,
+    };
+  }
+
+  async latestAmountForLead(leadId: string, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: leadId, ...leadScope(user) },
+      select: { id: true },
+    });
+    if (!lead) throw new NotFoundException("Lead not found");
+
+    const proposal = await this.prisma.proposal.findFirst({
+      where: { leadId: lead.id },
+      orderBy: { proposalDate: "desc" },
+      select: { finalAmount: true, serviceProduct: true },
+    });
+    if (!proposal) throw new NotFoundException("No proposal found for this lead");
+    return {
+      originalProposalAmount: Number(proposal.finalAmount),
+      serviceProduct: proposal.serviceProduct,
+    };
+  }
+
   async create(dto: CreateProposalDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     if ((dto.discount ?? 0) > dto.proposalAmount)
@@ -49,8 +77,15 @@ export class ProposalsService {
 
     const finalAmount =
       dto.proposalAmount - (dto.discount ?? 0) + (dto.tax ?? 0);
-    const proposalNumber = `DZN-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const year = new Date().getFullYear();
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        WITH proposal_lock AS MATERIALIZED (
+          SELECT pg_advisory_xact_lock(${year}::integer, 0::integer)
+        )
+        SELECT 1::integer AS locked FROM proposal_lock
+      `;
+      const proposalNumber = await this.nextProposalNumber(year, tx);
       const stageChanged = lead.stage !== LeadStage.PROPOSAL;
       await tx.lead.update({
         where: { id: lead.id },
@@ -63,9 +98,7 @@ export class ProposalsService {
             create: {
               type: "PROPOSAL_SENT",
               description: `Proposal ${proposalNumber} prepared for ${dto.serviceProduct}`,
-              userId: user.sub,
-              previousStage: stageChanged ? lead.stage : undefined,
-              newStage: stageChanged ? LeadStage.PROPOSAL : undefined,
+              user: { connect: { id: user.sub } },
             },
           },
           followUps: {
@@ -81,6 +114,9 @@ export class ProposalsService {
         data: {
           leadId: lead.id,
           proposalNumber,
+          proposalDate: dto.proposalDate
+            ? new Date(dto.proposalDate)
+            : new Date(),
           serviceProduct: dto.serviceProduct,
           proposalAmount: dto.proposalAmount,
           discount: dto.discount ?? 0,
@@ -104,6 +140,24 @@ export class ProposalsService {
         },
       });
     });
+  }
+
+  private async nextProposalNumber(
+    year: number,
+    client: Pick<Prisma.TransactionClient, "proposal"> = this.prisma,
+  ) {
+    const prefix = `DZN-${year}-`;
+    const existing = await client.proposal.findMany({
+      where: { proposalNumber: { startsWith: prefix } },
+      select: { proposalNumber: true },
+    });
+    const highest = existing.reduce((current, proposal) => {
+      const match = new RegExp(`^DZN-${year}-(\\d+)$`).exec(
+        proposal.proposalNumber,
+      );
+      return match ? Math.max(current, Number(match[1])) : current;
+    }, 0);
+    return `${prefix}${String(highest + 1).padStart(5, "0")}`;
   }
 
   async update(id: string, dto: UpdateProposalDto, user: Actor) {

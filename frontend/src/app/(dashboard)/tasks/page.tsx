@@ -1,5 +1,5 @@
 import { FollowUpWorkspace } from "../../../features/follow-ups/follow-up-workspace";
 
-export default function FollowUpsPage() {
+export default function TasksPage() {
   return <FollowUpWorkspace />;
 }

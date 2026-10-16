@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api-client";
+import { notify } from "../../../lib/notifications";
 
 type Customer = {
   id: string;
@@ -29,13 +30,14 @@ export default function CustomersPage() {
   useEffect(() => {
     apiClient<Customer[]>("/customers")
       .then(setCustomers)
-      .catch((reason: unknown) =>
-        setError(
+      .catch((reason: unknown) => {
+        const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load customers.",
-        ),
-      )
+            : "Unable to load customers.";
+        setError(message);
+        notify(message, "error");
+      })
       .finally(() => setLoading(false));
   }, []);
   const filtered = customers.filter((customer) =>
@@ -69,11 +71,6 @@ export default function CustomersPage() {
           All leads
         </Link>
       </header>
-      {error && (
-        <div className="workspace-notice" role="alert">
-          {error}
-        </div>
-      )}
       <div className="workspace-toolbar">
         <label className="search-field">
           <span aria-hidden="true">⌕</span>

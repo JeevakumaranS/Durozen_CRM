@@ -139,8 +139,8 @@ export class ReportsService {
     const scope = leadScope(user);
     const activityWhere: Prisma.ActivityWhereInput = {
       createdAt: { gte: start, lt: end },
-      newStage: { not: null },
       lead: scope,
+      type: { in: ["CONTACT", "QUALIFICATION"] },
     };
     const [
       leads,
@@ -160,7 +160,7 @@ export class ReportsService {
       }),
       this.prisma.activity.findMany({
         where: activityWhere,
-        select: { leadId: true, newStage: true },
+        select: { leadId: true, type: true },
       }),
       this.prisma.meeting.count({
         where: {
@@ -206,10 +206,13 @@ export class ReportsService {
     ]);
     const reached = new Map<LeadStage, Set<string>>();
     for (const activity of stageActivities) {
-      if (!activity.newStage) continue;
-      const set = reached.get(activity.newStage) ?? new Set<string>();
+      const stage =
+        activity.type === "CONTACT"
+          ? LeadStage.CONTACTED
+          : LeadStage.INTERESTED;
+      const set = reached.get(stage) ?? new Set<string>();
       set.add(activity.leadId);
-      reached.set(activity.newStage, set);
+      reached.set(stage, set);
     }
     const totalWon = won;
     return {

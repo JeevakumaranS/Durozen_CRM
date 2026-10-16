@@ -1,4 +1,10 @@
-import { IsDateString, IsIn, IsOptional, IsString } from "class-validator";
+import {
+  IsDateString,
+  IsIn,
+  IsOptional,
+  IsString,
+  Matches,
+} from "class-validator";
 
 export class CreateActivityDto {
   @IsIn([
@@ -8,6 +14,7 @@ export class CreateActivityDto {
     "Meeting",
     "Demo",
     "Note",
+    "Proposal",
     "Proposal Sent",
     "Negotiation",
   ])
@@ -20,11 +27,10 @@ export class CreateActivityDto {
   @IsString()
   outcome?: string;
 
-  @IsOptional()
   @IsString()
-  nextAction?: string;
+  @Matches(/\S/)
+  nextAction!: string;
 
-  @IsOptional()
   @IsDateString()
-  followUpAt?: string;
+  followUpAt!: string;
 }

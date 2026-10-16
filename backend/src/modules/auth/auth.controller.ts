@@ -24,8 +24,8 @@ export class AuthController {
   }
   @Post("logout")
   @UseGuards(JwtAuthGuard)
-  logout(@CurrentUser() user: { sub: string }) {
-    return this.auth.logout(user.sub);
+  logout() {
+    return this.auth.logout();
   }
   @Patch("password")
   @UseGuards(JwtAuthGuard)

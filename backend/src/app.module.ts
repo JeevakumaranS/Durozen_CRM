@@ -8,6 +8,7 @@ import { UsersModule } from "./modules/users/users.module";
 import { PipelineModule } from "./modules/pipeline/pipeline.module";
 import { FollowUpsModule } from "./modules/follow-ups/follow-ups.module";
 import { ActivitiesModule } from "./modules/activities/activities.module";
+import { CallsMessagesModule } from "./modules/calls-messages/calls-messages.module";
 import { MeetingsModule } from "./modules/meetings/meetings.module";
 import { ProposalsModule } from "./modules/proposals/proposals.module";
 import { NegotiationsModule } from "./modules/negotiations/negotiations.module";
@@ -39,6 +40,7 @@ import { GuardsModule } from "./common/guards/guards.module";
     PipelineModule,
     FollowUpsModule,
     ActivitiesModule,
+    CallsMessagesModule,
     MeetingsModule,
     ProposalsModule,
     NegotiationsModule,

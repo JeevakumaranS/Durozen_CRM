@@ -9,6 +9,7 @@ import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CreateFollowUpDto } from "./dto/create-follow-up.dto";
 import { UpdateFollowUpDto } from "./dto/update-follow-up.dto";
+import { canTransition } from "../pipeline/stage-rules";
 
 type FollowUpFilters = {
   scope?: string;
@@ -148,6 +149,7 @@ export class FollowUpsService {
 
     const conditions: Prisma.FollowUpWhereInput[] = [
       { lead: leadScope(user) },
+      { type: { in: ["Proposal Follow-up", "Negotiation"] } },
     ];
     if (filters.scope === "today") {
       conditions.push({
@@ -216,6 +218,12 @@ export class FollowUpsService {
             mobileNumber: true,
             stage: true,
             assignedBde: { select: { id: true, fullName: true } },
+            activities: {
+              where: { contactType: { not: null } },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: { contactType: true },
+            },
           },
         },
       },
@@ -243,6 +251,7 @@ export class FollowUpsService {
           where: {
             status: FollowUpStatus.PENDING,
             dueAt: { gte: start, lt: tomorrow },
+            type: { in: ["Proposal Follow-up", "Negotiation"] },
             lead,
           },
         }),
@@ -250,6 +259,7 @@ export class FollowUpsService {
           where: {
             status: FollowUpStatus.PENDING,
             dueAt: { gte: tomorrow },
+            type: { in: ["Proposal Follow-up", "Negotiation"] },
             lead,
           },
         }),
@@ -257,11 +267,16 @@ export class FollowUpsService {
           where: {
             status: FollowUpStatus.PENDING,
             dueAt: { lt: start },
+            type: { in: ["Proposal Follow-up", "Negotiation"] },
             lead,
           },
         }),
         this.prisma.followUp.count({
-          where: { status: FollowUpStatus.COMPLETED, lead },
+          where: {
+            status: FollowUpStatus.COMPLETED,
+            type: { in: ["Proposal Follow-up", "Negotiation"] },
+            lead,
+          },
         }),
       ])
       .then(([dueToday, upcoming, overdue, completed]) => ({
@@ -274,6 +289,11 @@ export class FollowUpsService {
 
   async create(dto: CreateFollowUpDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    if (!["Proposal Follow-up", "Negotiation"].includes(dto.type)) {
+      throw new BadRequestException(
+        "Tasks can only be created for proposals or negotiations.",
+      );
+    }
     const lead = await this.prisma.lead.findFirst({
       where: {
         id: dto.leadId,
@@ -307,6 +327,9 @@ export class FollowUpsService {
 
   async update(id: string, dto: UpdateFollowUpDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    if (dto.scheduleMeeting) {
+      assertActorRole(user, ["ADMIN", "BDE"]);
+    }
     const existing = await this.prisma.followUp.findFirst({
       where: {
         id,
@@ -321,10 +344,62 @@ export class FollowUpsService {
       }
       throw new BadRequestException("Only pending follow-ups can be updated");
     }
+    const isExistingLeadClosed =
+      existing.lead.stage === LeadStage.WON ||
+      existing.lead.stage === LeadStage.LOST;
+    if (
+      dto.status === FollowUpStatus.COMPLETED &&
+      (!dto.contactDate ||
+        !dto.contactType ||
+        (dto.nextStage !== LeadStage.LOST &&
+          (!dto.customerResponse?.trim() || !dto.requirement?.trim())) ||
+        (!isExistingLeadClosed && !dto.nextStage))
+    ) {
+      throw new BadRequestException(
+        "Contact date, contact type, next action, customer response, and requirements are required to complete a follow-up.",
+      );
+    }
 
+    if (
+      dto.scheduleMeeting &&
+      (dto.status !== FollowUpStatus.COMPLETED ||
+        dto.nextStage !== LeadStage.INTERESTED ||
+        !dto.meetingAt ||
+        !dto.meetingType)
+    ) {
+      throw new BadRequestException(
+        "Meeting date and type are required when scheduling a meeting for an interested lead.",
+      );
+    }
+    if (
+      dto.scheduleMeeting &&
+      dto.meetingAt &&
+      new Date(dto.meetingAt).getTime() <= Date.now()
+    ) {
+      throw new BadRequestException(
+        "The meeting date and time must be in the future.",
+      );
+    }
+    const requestedNextStage = dto.nextStage ?? existing.lead.stage;
+    const nextStage = requestedNextStage;
+    if (
+      dto.status === FollowUpStatus.COMPLETED &&
+      !canTransition(existing.lead.stage, nextStage)
+    ) {
+      throw new BadRequestException(
+        `Lead cannot move from ${existing.lead.stage} to ${nextStage}.`,
+      );
+    }
+    if (
+      dto.status === FollowUpStatus.RESCHEDULED &&
+      !dto.rescheduleReason
+    ) {
+      throw new BadRequestException(
+        "Choose a reason for rescheduling this follow-up.",
+      );
+    }
     const activeLead =
-      existing.lead.stage !== LeadStage.WON &&
-      existing.lead.stage !== LeadStage.LOST;
+      nextStage !== LeadStage.WON && nextStage !== LeadStage.LOST;
     const closesPending =
       existing.status === FollowUpStatus.PENDING &&
       (dto.status === FollowUpStatus.COMPLETED ||
@@ -333,20 +408,23 @@ export class FollowUpsService {
     if (
       activeLead &&
       closesPending &&
+      dto.status !== FollowUpStatus.COMPLETED &&
       (!dto.dueAt || !dto.nextAction?.trim())
     ) {
       throw new BadRequestException(
         "Set the next action and follow-up date before closing this follow-up.",
       );
     }
-    if (
-      closesPending &&
-      dto.dueAt &&
-      new Date(dto.dueAt).getTime() <= Date.now()
-    ) {
-      throw new BadRequestException(
-        "The next follow-up date and time must be in the future.",
-      );
+    if (closesPending && dto.dueAt) {
+      const dueParts = zonedParts(new Date(dto.dueAt));
+      const todayParts = zonedParts(new Date());
+      const dueDate = `${dueParts.year}-${String(dueParts.month).padStart(2, "0")}-${String(dueParts.day).padStart(2, "0")}`;
+      const today = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
+      if (dueDate < today) {
+        throw new BadRequestException(
+          "The next follow-up date cannot be in the past.",
+        );
+      }
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -354,7 +432,19 @@ export class FollowUpsService {
         where: { id, status: FollowUpStatus.PENDING },
         data: {
           status: dto.status,
-          remarks: dto.remarks ?? existing.remarks,
+          remarks:
+            dto.status === FollowUpStatus.COMPLETED
+              ? (dto.remarks ?? null)
+              : dto.status === FollowUpStatus.RESCHEDULED
+                ? [
+                    `Reschedule reason: ${dto.rescheduleReason}`,
+                    dto.remarks?.trim()
+                      ? `Remarks: ${dto.remarks.trim()}`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join("\n")
+                : (dto.remarks ?? existing.remarks),
           ...(dto.status === FollowUpStatus.PENDING
             ? {
                 dueAt: dto.dueAt ? new Date(dto.dueAt) : undefined,
@@ -368,7 +458,68 @@ export class FollowUpsService {
           "This follow-up has already been updated.",
         );
       }
-      if (activeLead && closesPending && dto.dueAt && dto.nextAction) {
+      if (dto.status === FollowUpStatus.COMPLETED) {
+        await tx.activity.create({
+          data: {
+            leadId: existing.leadId,
+            userId: user.sub,
+            type:
+              requestedNextStage === LeadStage.INTERESTED
+                ? "QUALIFICATION"
+                : "CONTACT",
+            description: `Follow-up completed: ${existing.nextAction}`,
+            outcome: dto.customerResponse?.trim() || undefined,
+            contactDate: new Date(dto.contactDate!),
+            contactType: dto.contactType,
+            customerResponse: dto.customerResponse?.trim() || undefined,
+            expectedTimeline: dto.expectedTimeline,
+          },
+        });
+      }
+      if (
+        dto.scheduleMeeting &&
+        dto.meetingAt
+      ) {
+        const meetingAt = new Date(dto.meetingAt);
+        const meetingNextAction = "Attend scheduled meeting";
+        const meeting = await tx.meeting.create({
+          data: {
+            leadId: existing.leadId,
+            meetingAt,
+            type: dto.meetingType!,
+            participants: dto.meetingParticipants?.trim() || undefined,
+            requirement: dto.requirement ?? undefined,
+            budget: dto.customerBudget ?? undefined,
+            nextAction: meetingNextAction,
+            followUpAt: meetingAt,
+          },
+        });
+        await tx.activity.create({
+          data: {
+            leadId: existing.leadId,
+            meetingId: meeting.id,
+            userId: user.sub,
+            type: "MEETING_SCHEDULED",
+            description: `${meeting.type} scheduled for ${meeting.meetingAt.toISOString()}`,
+          },
+        });
+        await tx.followUp.create({
+          data: {
+            leadId: existing.leadId,
+            meetingId: meeting.id,
+            dueAt: meetingAt,
+            type: "Meeting",
+            nextAction: meetingNextAction,
+          },
+        });
+        await tx.lead.update({
+          where: { id: existing.leadId },
+          data: {
+            followUpAt: meetingAt,
+            nextAction: meetingNextAction,
+          },
+        });
+      } else if (activeLead && closesPending && dto.dueAt && dto.nextAction) {
         await tx.followUp.create({
           data: {
             leadId: existing.leadId,
@@ -380,7 +531,10 @@ export class FollowUpsService {
         });
         await tx.lead.update({
           where: { id: existing.leadId },
-          data: { followUpAt: new Date(dto.dueAt), nextAction: dto.nextAction },
+          data: {
+            followUpAt: new Date(dto.dueAt),
+            nextAction: dto.nextAction,
+          },
         });
       } else if (
         activeLead &&
@@ -395,6 +549,47 @@ export class FollowUpsService {
             nextAction: dto.nextAction ?? existing.nextAction,
           },
         });
+      }
+      if (dto.status === FollowUpStatus.COMPLETED) {
+        const leadUpdate = await tx.lead.update({
+          where: { id: existing.leadId },
+          data: {
+            stage: nextStage,
+            stageEnteredAt:
+              nextStage !== existing.lead.stage ? new Date() : undefined,
+            requirement: dto.requirement,
+            estimatedBudget: dto.customerBudget,
+            remarks: dto.remarks,
+            lostReason:
+              nextStage === LeadStage.LOST
+                ? (dto.lostReason ?? "Not Interested")
+                : undefined,
+            nextAction: dto.scheduleMeeting ? undefined : null,
+            followUpAt: dto.scheduleMeeting ? undefined : null,
+          },
+          select: { id: true, stage: true },
+        });
+        if (leadUpdate.stage !== nextStage) {
+          throw new BadRequestException(
+            `Lead stage was not updated to ${nextStage}.`,
+          );
+        }
+        if (nextStage === LeadStage.LOST) {
+          await tx.followUp.updateMany({
+            where: {
+              leadId: existing.leadId,
+              status: FollowUpStatus.PENDING,
+            },
+            data: { status: FollowUpStatus.CANCELLED },
+          });
+          await tx.callMessage.updateMany({
+            where: {
+              leadId: existing.leadId,
+              status: FollowUpStatus.PENDING,
+            },
+            data: { status: FollowUpStatus.CANCELLED },
+          });
+        }
       }
       return tx.followUp.findUniqueOrThrow({ where: { id } });
     });

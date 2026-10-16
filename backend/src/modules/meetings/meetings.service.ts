@@ -14,6 +14,7 @@ import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateMeetingDto } from "./dto/create-meeting.dto";
+import { LogMeetingDto } from "./dto/log-meeting.dto";
 import { UpdateMeetingDto } from "./dto/update-meeting.dto";
 
 const meetingInclude = {
@@ -160,8 +161,6 @@ export class MeetingsService {
           userId: user.sub,
           type: "MEETING_SCHEDULED",
           description: `${dto.type} scheduled for ${meetingAt.toISOString()}`,
-          previousStage: stageChanged ? lead.stage : undefined,
-          newStage: stageChanged ? LeadStage.MEETING : undefined,
         },
       });
       await tx.followUp.create({
@@ -171,6 +170,51 @@ export class MeetingsService {
           dueAt: followUpAt,
           type: "Meeting",
           nextAction: dto.nextAction,
+        },
+      });
+      return tx.meeting.findUniqueOrThrow({
+        where: { id: meeting.id },
+        include: meetingInclude,
+      });
+    });
+  }
+
+  async log(dto: LogMeetingDto, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: dto.leadId, ...leadScope(user) },
+      select: {
+        id: true,
+        nextAction: true,
+        followUpAt: true,
+      },
+    });
+    if (!lead) throw new NotFoundException("Lead not found");
+
+    const meetingAt = new Date(dto.meetingAt);
+    return this.prisma.$transaction(async (tx) => {
+      const completedAt = new Date();
+      const meeting = await tx.meeting.create({
+        data: {
+          leadId: lead.id,
+          meetingAt,
+          completedAt,
+          status: MeetingStatus.COMPLETED,
+          type: dto.type,
+          discussionNotes: dto.description.trim(),
+          customerConcerns: dto.outcome?.trim() || undefined,
+          nextAction: lead.nextAction ?? "Meeting logged",
+          followUpAt: lead.followUpAt ?? meetingAt,
+        },
+      });
+      await tx.activity.create({
+        data: {
+          leadId: lead.id,
+          meetingId: meeting.id,
+          userId: user.sub,
+          type: "MEETING_COMPLETED",
+          description: dto.description.trim(),
+          outcome: dto.outcome?.trim() || undefined,
         },
       });
       return tx.meeting.findUniqueOrThrow({

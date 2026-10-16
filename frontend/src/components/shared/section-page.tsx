@@ -16,8 +16,8 @@ export function SectionPage({ title, description }: SectionPageProps) {
           {[
             ["Dashboard", "/dashboard"],
             ["Leads", "/leads"],
-            ["Pipeline", "/pipeline"],
-            ["Follow-ups", "/follow-ups"],
+            ["Sales Pipeline", "/pipeline"],
+            ["Tasks", "/tasks"],
             ["Proposals", "/proposals"],
             ["Customers", "/customers"],
             ["Performance", "/performance"],

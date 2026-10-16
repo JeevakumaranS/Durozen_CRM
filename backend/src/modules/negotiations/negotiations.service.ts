@@ -5,6 +5,7 @@ import {
 } from "@nestjs/common";
 import { LeadStage } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateNegotiationDto } from "./dto/create-negotiation.dto";
@@ -17,10 +18,10 @@ export class NegotiationsService {
   ) {}
 
   list(user: Actor) {
-    assertActorRole(user, ["ADMIN"]);
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     return this.prisma.negotiation.findMany({
       where:
-        user.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : undefined,
+        user.role === "ADMIN" ? undefined : { lead: { ...leadScope(user) } },
       include: {
         lead: { include: { assignedBde: { select: { fullName: true } } } },
       },
@@ -29,11 +30,11 @@ export class NegotiationsService {
   }
 
   async create(dto: CreateNegotiationDto, user: Actor) {
-    assertActorRole(user, ["ADMIN"]);
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const lead = await this.prisma.lead.findFirst({
       where: {
         id: dto.leadId,
-        ...(user.role === "BDE" ? { assignedBdeId: user.sub } : {}),
+        ...leadScope(user),
       },
     });
     if (!lead) throw new NotFoundException("Lead not found");
@@ -64,9 +65,7 @@ export class NegotiationsService {
               description: dto.customerConcern
                 ? `Negotiation started: ${dto.customerConcern}`
                 : "Negotiation started",
-              userId: user.sub,
-              previousStage: stageChanged ? lead.stage : undefined,
-              newStage: stageChanged ? LeadStage.NEGOTIATION : undefined,
+              user: { connect: { id: user.sub } },
             },
           },
           followUps: {

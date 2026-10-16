@@ -10,6 +10,7 @@ import {
   setAccessToken,
   setAuthUser,
 } from "../../../lib/auth";
+import { notify } from "../../../lib/notifications";
 
 type LoginResponse = { accessToken: string; user: AuthUser };
 
@@ -17,13 +18,17 @@ export default function LoginForm() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    const tokenExpired = window.sessionStorage.getItem("durozen_token_expired");
+    if (tokenExpired) {
+      notify("Your session has expired. Please sign in again.", "error");
+      window.sessionStorage.removeItem("durozen_token_expired");
+    }
     const warning = window.sessionStorage.getItem("durozen_logout_warning");
     if (warning) {
-      setError(warning);
+      notify(warning, "error");
       window.sessionStorage.removeItem("durozen_logout_warning");
     }
     if (!getAccessToken()) return;
@@ -39,7 +44,6 @@ export default function LoginForm() {
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
-    setError("");
     try {
       const result = await apiClient<LoginResponse>("/auth/login", {
         method: "POST",
@@ -51,7 +55,10 @@ export default function LoginForm() {
         result.user.role === "ADMIN" ? "/admin" : "/dashboard",
       );
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to sign in.");
+      notify(
+        reason instanceof Error ? reason.message : "Unable to sign in.",
+        "error",
+      );
     } finally {
       setBusy(false);
     }
@@ -89,11 +96,6 @@ export default function LoginForm() {
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>
-          {error && (
-            <p className="login-error" role="alert">
-              {error}
-            </p>
-          )}
           <button className="primary" disabled={busy}>
             {busy ? "Signing in..." : "Sign in"}
           </button>

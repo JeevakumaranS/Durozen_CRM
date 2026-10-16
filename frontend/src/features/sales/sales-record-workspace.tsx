@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { apiClient } from "../../lib/api-client";
+import { notify } from "../../lib/notifications";
+import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 
 type Kind = "proposals" | "negotiations";
 type LeadOption = {
@@ -44,12 +46,12 @@ const configs: Record<
       { name: "discount", label: "Discount (₹)", type: "number" },
       { name: "tax", label: "Tax (₹)", type: "number" },
       { name: "validityUntil", label: "Valid until", type: "date" },
-      { name: "sentAt", label: "Sent date", type: "datetime-local" },
+      { name: "sentAt", label: "Sent", type: "datetime" },
       { name: "customerResponse", label: "Customer response" },
       {
         name: "followUpAt",
-        label: "Follow-up date and time",
-        type: "datetime-local",
+        label: "Follow-up",
+        type: "datetime",
         required: true,
       },
       { name: "nextAction", label: "Next action", required: true },
@@ -81,8 +83,8 @@ const configs: Record<
       { name: "competitorInformation", label: "Competitor information" },
       {
         name: "followUpAt",
-        label: "Follow-up date and time",
-        type: "datetime-local",
+        label: "Follow-up",
+        type: "datetime",
         required: true,
       },
       { name: "nextAction", label: "Next action", required: true },
@@ -104,6 +106,7 @@ const dateFields = new Set([
   "validityUntil",
   "sentAt",
 ]);
+const dateTimeFields = new Set(["followUpAt", "sentAt"]);
 const text = (value: unknown) =>
   value === undefined || value === null || value === "" ? "—" : String(value);
 const money = (value: unknown) =>
@@ -132,7 +135,6 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,14 +147,14 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
       setLeads(
         leadRows.filter((lead) => !["WON", "LOST"].includes(lead.stage)),
       );
-      setNotice("");
     } catch (error) {
       setRecords([]);
       setLeads([]);
-      setNotice(
+      notify(
         error instanceof Error
           ? error.message
           : `Unable to load ${config.title.toLowerCase()}.`,
+        "error",
       );
     } finally {
       setLoading(false);
@@ -174,14 +176,28 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
 
   async function createRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const missingDateTime = config.fields.find(
+      (field) =>
+        field.required &&
+        dateTimeFields.has(field.name) &&
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(form[field.name] ?? ""),
+    );
+    if (missingDateTime) {
+      notify(`Choose ${missingDateTime.label.toLowerCase()}.`, "error");
+      return;
+    }
     setBusy(true);
     const body: Record<string, unknown> = { leadId: form.leadId };
     for (const field of config.fields) {
       const value = form[field.name] ?? field.options?.[0];
       if (!value) continue;
+      if (
+        dateTimeFields.has(field.name) &&
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)
+      ) continue;
       body[field.name] = numericFields.has(field.name)
         ? Number(value)
-        : dateFields.has(field.name)
+        : dateTimeFields.has(field.name) || dateFields.has(field.name)
           ? new Date(value).toISOString()
           : value;
     }
@@ -192,13 +208,14 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
       });
       setForm({ leadId: "" });
       setShowForm(false);
-      setNotice(`${config.title.slice(0, -1)} saved.`);
+      notify(`${config.title.slice(0, -1)} saved.`);
       await load();
     } catch (error) {
-      setNotice(
+      notify(
         error instanceof Error
           ? error.message
           : `Unable to save ${config.title.toLowerCase()}.`,
+        "error",
       );
     } finally {
       setBusy(false);
@@ -212,13 +229,14 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
         method: "PATCH",
         body: JSON.stringify({ customerResponse: responses[recordId] }),
       });
-      setNotice("Proposal response updated.");
+      notify("Proposal response updated.");
       await load();
     } catch (error) {
-      setNotice(
+      notify(
         error instanceof Error
           ? error.message
           : "Unable to update proposal response.",
+        "error",
       );
     } finally {
       setBusy(false);
@@ -315,19 +333,13 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
         </div>
         <div className="workspace-actions">
           <Link className="secondary-action" href="/pipeline">
-            Pipeline
+            Sales Pipeline
           </Link>
           <button className="primary" onClick={() => setShowForm(true)}>
             + Add {config.title.slice(0, -1).toLowerCase()}
           </button>
         </div>
       </header>
-      {notice && (
-        <div className="workspace-notice" role="status">
-          {notice}
-          <button onClick={() => setNotice("")}>×</button>
-        </div>
-      )}
       <div className="sales-record-list">
         {loading && (
           <p className="dashboard-loading">
@@ -354,7 +366,7 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
             <div className="sales-record-fields">{recordSummary(record)}</div>
           </article>
         ))}
-        {!loading && !notice && records.length === 0 && (
+        {!loading && records.length === 0 && (
           <div className="empty-list">
             No {config.title.toLowerCase()} recorded yet.
           </div>
@@ -437,46 +449,59 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
                   ))}
                 </select>
               </label>
-              {config.fields.map((field) => (
-                <label
-                  className={field.type === "textarea" ? "form-wide" : ""}
-                  key={field.name}
-                >
-                  {field.label}
-                  {field.options ? (
-                    <select
-                      required={field.required}
-                      value={form[field.name] ?? field.options[0]}
-                      onChange={(event) =>
-                        setForm({ ...form, [field.name]: event.target.value })
-                      }
-                    >
-                      {field.options.map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                  ) : field.type === "textarea" ? (
-                    <textarea
-                      rows={2}
-                      required={field.required}
-                      value={form[field.name] ?? ""}
-                      onChange={(event) =>
-                        setForm({ ...form, [field.name]: event.target.value })
-                      }
-                    />
-                  ) : (
-                    <input
-                      type={field.type ?? "text"}
-                      min={field.type === "number" ? 0 : undefined}
-                      required={field.required}
-                      value={form[field.name] ?? ""}
-                      onChange={(event) =>
-                        setForm({ ...form, [field.name]: event.target.value })
-                      }
-                    />
-                  )}
-                </label>
-              ))}
+              {config.fields.map((field) =>
+                field.type === "datetime" ? (
+                  <ClockDateTimePicker
+                    key={field.name}
+                    className="form-wide"
+                    label={field.label}
+                    required={field.required}
+                    value={form[field.name] ?? ""}
+                    onChange={(value) =>
+                      setForm({ ...form, [field.name]: value })
+                    }
+                  />
+                ) : (
+                  <label
+                    className={field.type === "textarea" ? "form-wide" : ""}
+                    key={field.name}
+                  >
+                    {field.label}
+                    {field.options ? (
+                      <select
+                        required={field.required}
+                        value={form[field.name] ?? field.options[0]}
+                        onChange={(event) =>
+                          setForm({ ...form, [field.name]: event.target.value })
+                        }
+                      >
+                        {field.options.map((option) => (
+                          <option key={option}>{option}</option>
+                        ))}
+                      </select>
+                    ) : field.type === "textarea" ? (
+                      <textarea
+                        rows={2}
+                        required={field.required}
+                        value={form[field.name] ?? ""}
+                        onChange={(event) =>
+                          setForm({ ...form, [field.name]: event.target.value })
+                        }
+                      />
+                    ) : (
+                      <input
+                        type={field.type ?? "text"}
+                        min={field.type === "number" ? 0 : undefined}
+                        required={field.required}
+                        value={form[field.name] ?? ""}
+                        onChange={(event) =>
+                          setForm({ ...form, [field.name]: event.target.value })
+                        }
+                      />
+                    )}
+                  </label>
+                ),
+              )}
               <div className="form-footer">
                 <p>
                   Saving this record updates the lead stage and activity

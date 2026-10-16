@@ -99,7 +99,6 @@ async function main() {
           fullName,
           passwordHash,
           isActive: true,
-          tokenVersion: { increment: 1 },
         },
         select: { id: true, fullName: true, email: true },
       })

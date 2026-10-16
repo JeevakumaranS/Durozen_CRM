@@ -8,4 +8,18 @@ export function getJwtSecret(): string {
   return secret;
 }
 
-export default () => ({ jwt: { secret: getJwtSecret(), expiresIn: "8h" } });
+export function getJwtExpirationMinutes(): number {
+  const value = process.env.JWT_EXPIRES_IN_MINUTES ?? "480";
+  const minutes = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(minutes) || minutes <= 0) {
+    throw new Error("JWT_EXPIRES_IN_MINUTES must be a positive whole number");
+  }
+  return minutes;
+}
+
+export default () => ({
+  jwt: {
+    secret: getJwtSecret(),
+    expiresIn: `${getJwtExpirationMinutes()}m`,
+  },
+});

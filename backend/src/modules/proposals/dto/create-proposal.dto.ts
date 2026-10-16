@@ -9,6 +9,7 @@ import {
 
 export class CreateProposalDto {
   @IsUUID() leadId!: string;
+  @IsOptional() @IsDateString() proposalDate?: string;
   @IsString() serviceProduct!: string;
   @IsNumber() @Min(0) proposalAmount!: number;
   @IsOptional() @IsNumber() @Min(0) discount?: number;

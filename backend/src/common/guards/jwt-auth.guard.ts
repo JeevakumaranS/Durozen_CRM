@@ -4,7 +4,7 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { Injectable } from "@nestjs/common";
-import { JwtPayload } from "jsonwebtoken";
+import { JwtPayload, TokenExpiredError } from "jsonwebtoken";
 import { verify } from "jsonwebtoken";
 import { getJwtSecret } from "../../config/jwt.config";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -25,14 +25,19 @@ export class JwtAuthGuard implements CanActivate {
     let claims: JwtPayload | string;
     try {
       claims = verify(token, getJwtSecret());
-    } catch {
+    } catch (error) {
+      if (error instanceof TokenExpiredError) {
+        throw new UnauthorizedException({
+          code: "TOKEN_EXPIRED",
+          message: "Your session has expired. Please sign in again.",
+        });
+      }
       throw new UnauthorizedException();
     }
 
     if (
       typeof claims === "string" ||
-      typeof claims.sub !== "string" ||
-      typeof claims.tokenVersion !== "number"
+      typeof claims.sub !== "string"
     ) {
       throw new UnauthorizedException();
     }
@@ -44,13 +49,9 @@ export class JwtAuthGuard implements CanActivate {
         fullName: true,
         email: true,
         isActive: true,
-        tokenVersion: true,
       },
     });
-    if (
-      !user?.isActive ||
-      user.tokenVersion !== claims.tokenVersion
-    ) {
+    if (!user?.isActive) {
       throw new UnauthorizedException();
     }
 
