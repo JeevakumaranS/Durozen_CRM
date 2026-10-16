@@ -8,6 +8,11 @@ import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { formatBusinessDateTime } from "../../common/business-time";
 import { assertNoScheduledMeeting } from "../../common/scheduled-meeting";
 import { leadScope } from "../../common/authorization/lead-scope";
+import {
+  businessDateParts,
+  businessDateTime,
+  startOfBusinessDay,
+} from "../../common/utils/business-time";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CreateFollowUpDto } from "./dto/create-follow-up.dto";
 import { UpdateFollowUpDto } from "./dto/update-follow-up.dto";
@@ -22,61 +27,6 @@ type FollowUpFilters = {
   from?: string;
   to?: string;
 };
-
-const BUSINESS_TIME_ZONE = "Asia/Kolkata";
-
-function zonedParts(date: Date) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: BUSINESS_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  return Object.fromEntries(
-    parts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)]),
-  ) as { year: number; month: number; day: number };
-}
-
-function zonedDateTime(
-  year: number,
-  month: number,
-  day: number,
-  hour = 0,
-  minute = 0,
-) {
-  const utcGuess = Date.UTC(year, month - 1, day, hour, minute);
-  const localParts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: BUSINESS_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date(utcGuess));
-  const values = Object.fromEntries(
-    localParts
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)]),
-  );
-  const representedUtc = Date.UTC(
-    values.year,
-    values.month - 1,
-    values.day,
-    values.hour,
-    values.minute,
-    values.second,
-  );
-  return new Date(utcGuess - (representedUtc - utcGuess));
-}
-
-function startOfBusinessDay(date: Date) {
-  const { year, month, day } = zonedParts(date);
-  return zonedDateTime(year, month, day);
-}
 
 function dateInputBoundary(value: string | undefined, inclusiveEnd = false) {
   if (!value) return undefined;
@@ -93,7 +43,7 @@ function dateInputBoundary(value: string | undefined, inclusiveEnd = false) {
     throw new BadRequestException("Invalid date range.");
   }
   if (inclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
-  return zonedDateTime(
+  return businessDateTime(
     date.getUTCFullYear(),
     date.getUTCMonth() + 1,
     date.getUTCDate(),
@@ -117,11 +67,11 @@ export class FollowUpsService {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const now = new Date();
     const start = startOfBusinessDay(now);
-    const todayParts = zonedParts(start);
+    const todayParts = businessDateParts(start);
     const tomorrowDate = new Date(
       Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day + 1),
     );
-    const tomorrow = zonedDateTime(
+    const tomorrow = businessDateTime(
       tomorrowDate.getUTCFullYear(),
       tomorrowDate.getUTCMonth() + 1,
       tomorrowDate.getUTCDate(),
@@ -254,11 +204,11 @@ export class FollowUpsService {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const now = new Date();
     const start = startOfBusinessDay(now);
-    const todayParts = zonedParts(start);
+    const todayParts = businessDateParts(start);
     const tomorrowDate = new Date(
       Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day + 1),
     );
-    const tomorrow = zonedDateTime(
+    const tomorrow = businessDateTime(
       tomorrowDate.getUTCFullYear(),
       tomorrowDate.getUTCMonth() + 1,
       tomorrowDate.getUTCDate(),
@@ -435,8 +385,8 @@ export class FollowUpsService {
       );
     }
     if (closesPending && dto.dueAt) {
-      const dueParts = zonedParts(new Date(dto.dueAt));
-      const todayParts = zonedParts(new Date());
+      const dueParts = businessDateParts(new Date(dto.dueAt));
+      const todayParts = businessDateParts(new Date());
       const dueDate = `${dueParts.year}-${String(dueParts.month).padStart(2, "0")}-${String(dueParts.day).padStart(2, "0")}`;
       const today = `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
       if (dueDate < today) {

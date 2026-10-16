@@ -1,5 +1,5 @@
-import { ReportsWorkspace } from "../../../../features/reports/report-workspaces";
+import { ReportDetailWorkspace } from "../../../../features/reports/report-workspaces";
 
 export default function ReportTypePage() {
-  return <ReportsWorkspace />;
+  return <ReportDetailWorkspace />;
 }

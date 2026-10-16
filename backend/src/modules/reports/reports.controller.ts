@@ -10,6 +10,12 @@ import { ReportsService } from "./reports.service";
 export class ReportsController {
   constructor(private readonly reports: ReportsService) {}
 
+  @Get("bde-options")
+  @Roles("ADMIN", "BDE", "SALES_MANAGER")
+  bdeOptions(@CurrentUser() user: { sub: string; role: string }) {
+    return this.reports.bdeOptions(user);
+  }
+
   @Get("monthly-summary")
   @Roles("ADMIN", "BDE", "SALES_MANAGER")
   monthlySummary(
@@ -25,8 +31,19 @@ export class ReportsController {
     @Param("type") type: string,
     @Query("from") from: string | undefined,
     @Query("to") to: string | undefined,
+    @Query("assignedBdeId") assignedBdeId: string | undefined,
+    @Query("stage") stage: string | undefined,
+    @Query("status") status: string | undefined,
+    @Query("category") category: string | undefined,
+    @Query("lostReason") lostReason: string | undefined,
     @CurrentUser() user: { sub: string; role: string },
   ) {
-    return this.reports.run(type, from, to, user);
+    return this.reports.run(type, from, to, user, {
+      assignedBdeId,
+      stage,
+      status,
+      category,
+      lostReason,
+    });
   }
 }

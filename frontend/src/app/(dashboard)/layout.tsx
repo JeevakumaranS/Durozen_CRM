@@ -32,7 +32,7 @@ const adminNavigation = [
   ["Proposals", "/proposals"],
   ["Negotiations", "/negotiations"],
   ["Customers", "/customers"],
-  ["Performance", "/performance"],
+  ["Reports", "/reports"],
   ["Admin dashboard", "/admin"],
 ];
 
@@ -46,6 +46,7 @@ const bdeRoutes = [
   "/proposals",
   "/customers",
   "/performance",
+  "/reports",
 ];
 const managerRoutes = [
   "/dashboard",
@@ -62,7 +63,6 @@ const managerNavigation = [
   ["Sales Pipeline", "/pipeline"],
   ["Tasks", "/tasks"],
   ["Proposals", "/proposals"],
-  ["Performance", "/performance"],
   ["Reports", "/reports"],
 ];
 const bdeNavigation = [
@@ -72,7 +72,7 @@ const bdeNavigation = [
   ["Activities", "/activities"],
   ["Proposals", "/proposals"],
   ["Customers", "/customers"],
-  ["Performance", "/performance"],
+  ["Reports", "/reports"],
 ];
 
 export default function DashboardLayout({

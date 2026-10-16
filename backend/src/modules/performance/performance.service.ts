@@ -1,19 +1,56 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { LeadStage, MeetingStatus } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import {
+  businessDateParts,
+  businessDateTime,
+} from "../../common/utils/business-time";
 import { PrismaService } from "../../prisma/prisma.service";
+
+function dateBoundary(value: string, inclusiveEnd = false) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match) {
+    const date = new Date(
+      Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+    );
+    if (
+      date.getUTCFullYear() !== Number(match[1]) ||
+      date.getUTCMonth() + 1 !== Number(match[2]) ||
+      date.getUTCDate() !== Number(match[3])
+    ) {
+      throw new BadRequestException("Invalid performance date range");
+    }
+    if (inclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
+    return businessDateTime(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+    );
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new BadRequestException("Invalid performance date range");
+  }
+  return inclusiveEnd ? new Date(date.getTime() + 1) : date;
+}
 
 @Injectable()
 export class PerformanceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async summary(from: string | undefined, to: string | undefined, user: Actor) {
+  async summary(
+    from: string | undefined,
+    to: string | undefined,
+    user: Actor,
+    assignedBdeId?: string,
+  ) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const now = new Date();
+    const currentMonth = businessDateParts(now);
     const start = from
-      ? new Date(from)
-      : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-    const end = to ? new Date(to) : new Date();
-    end.setHours(23, 59, 59, 999);
+      ? dateBoundary(from)
+      : businessDateTime(currentMonth.year, currentMonth.month, 1);
+    const end = to ? dateBoundary(to, true) : now;
     if (
       Number.isNaN(start.getTime()) ||
       Number.isNaN(end.getTime()) ||
@@ -21,9 +58,7 @@ export class PerformanceService {
     ) {
       throw new BadRequestException("Invalid performance date range");
     }
-    const range = { gte: start, lte: end };
-    const now = new Date();
-    const overdueEnd = end < now ? new Date(end.getTime() + 1) : now;
+    const range = { gte: start, lt: end };
     const users = await this.prisma.user.findMany({
       where: {
         isActive: true,
@@ -33,6 +68,9 @@ export class PerformanceService {
           : user.role === "SALES_MANAGER"
             ? { managerId: user.sub }
             : {}),
+        ...(assignedBdeId && user.role !== "BDE"
+          ? { id: assignedBdeId }
+          : {}),
       },
       select: { id: true, fullName: true },
       orderBy: { fullName: "asc" },
@@ -43,6 +81,7 @@ export class PerformanceService {
 
     const [
       leads,
+      stageActivities,
       meetings,
       proposals,
       negotiations,
@@ -53,7 +92,15 @@ export class PerformanceService {
     ] = await Promise.all([
       this.prisma.lead.findMany({
         where: { assignedBdeId: { in: ids }, createdAt: range },
-        select: { assignedBdeId: true, stage: true },
+        select: { assignedBdeId: true },
+      }),
+      this.prisma.activity.findMany({
+        where: {
+          createdAt: range,
+          type: { in: ["CONTACT", "QUALIFICATION"] },
+          lead: { assignedBdeId: { in: ids } },
+        },
+        select: { type: true, leadId: true, lead: { select: { assignedBdeId: true } } },
       }),
       this.prisma.meeting.findMany({
         where: {
@@ -78,11 +125,15 @@ export class PerformanceService {
             { status: "COMPLETED", updatedAt: range },
             {
               status: "PENDING",
-              dueAt: { gte: start, lt: overdueEnd },
+              dueAt: { gte: start, lt: end < now ? end : now },
             },
           ],
         },
-        select: { status: true, lead: { select: { assignedBdeId: true } } },
+        select: {
+          status: true,
+          dueAt: true,
+          lead: { select: { assignedBdeId: true } },
+        },
       }),
       this.prisma.lead.findMany({
         where: {
@@ -115,8 +166,15 @@ export class PerformanceService {
     ) => rows.filter((row) => row.lead.assignedBdeId === userId).length;
     const bdes = users.map((person) => {
       const owned = leads.filter((lead) => lead.assignedBdeId === person.id);
-      const stageCount = (stage: LeadStage) =>
-        owned.filter((lead) => lead.stage === stage).length;
+      const ownActivities = stageActivities.filter(
+        (activity) => activity.lead.assignedBdeId === person.id,
+      );
+      const distinctLeadsAtActivity = (type: string) =>
+        new Set(
+          ownActivities
+            .filter((activity) => activity.type === type)
+            .map((activity) => activity.leadId),
+        ).size;
       const ownFollowUps = followUps.filter(
         (item) => item.lead.assignedBdeId === person.id,
       );
@@ -124,8 +182,8 @@ export class PerformanceService {
         userId: person.id,
         name: person.fullName,
         totalLeads: owned.length,
-        contacted: stageCount(LeadStage.CONTACTED),
-        interested: stageCount(LeadStage.INTERESTED),
+        contacted: distinctLeadsAtActivity("CONTACT"),
+        interested: distinctLeadsAtActivity("QUALIFICATION"),
         meetings: count(meetings, person.id),
         proposals: count(proposals, person.id),
         negotiations: count(negotiations, person.id),
@@ -136,7 +194,7 @@ export class PerformanceService {
           (item) => item.status === "COMPLETED",
         ).length,
         overdueFollowUps: ownFollowUps.filter(
-          (item) => item.status === "PENDING",
+          (item) => item.status === "PENDING" && item.dueAt < now,
         ).length,
         revenue: String(
           revenue

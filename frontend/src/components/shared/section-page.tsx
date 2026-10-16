@@ -20,7 +20,6 @@ export function SectionPage({ title, description }: SectionPageProps) {
             ["Tasks", "/tasks"],
             ["Proposals", "/proposals"],
             ["Customers", "/customers"],
-            ["Performance", "/performance"],
             ["Reports", "/reports"],
           ].map(([label, href]) => (
             <Link
