@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { getAccessToken, getAuthUser } from "../../lib/auth";
@@ -35,20 +36,279 @@ type BdeMetrics = {
   revenue: string;
 };
 type ReportRow = Record<string, unknown>;
+type BdeOption = { id: string; fullName: string };
+
+type ReportPaginationProps = {
+  page: number;
+  pageSize: number;
+  totalRows: number;
+  label: string;
+  onPageChange: (page: number) => void;
+};
+
+function ReportPagination({
+  page,
+  pageSize,
+  totalRows,
+  label,
+  onPageChange,
+}: ReportPaginationProps) {
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  if (totalPages <= 1) return null;
+
+  const firstRow = (page - 1) * pageSize + 1;
+  const lastRow = Math.min(page * pageSize, totalRows);
+
+  return (
+    <nav
+      className="pagination report-pagination report-screen-controls"
+      aria-label={label}
+    >
+      <span>
+        Showing {firstRow}-{lastRow} of {totalRows}
+      </span>
+      <div className="pagination-controls">
+        <button
+          className="secondary-action"
+          type="button"
+          onClick={() => onPageChange(Math.max(1, page - 1))}
+          disabled={page === 1}
+        >
+          Previous
+        </button>
+        <strong>
+          {page} / {totalPages}
+        </strong>
+        <button
+          className="secondary-action"
+          type="button"
+          onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+          disabled={page === totalPages}
+        >
+          Next
+        </button>
+      </div>
+    </nav>
+  );
+}
 
 const reportTypes = [
-  ["leads", "Lead report"],
-  ["pipeline", "Sales Pipeline report"],
-  ["follow-ups", "Follow-up report"],
-  ["proposals", "Proposal report"],
-  ["meetings", "Meeting report"],
-  ["negotiations", "Negotiation report"],
-  ["won-lost", "Won / lost report"],
-  ["revenue", "Revenue report"],
-  ["lost-leads", "Lost lead analysis"],
-  ["bde-performance", "BDE performance report"],
-  ["monthly-summary", "Monthly summary"],
+  {
+    slug: "bde-performance",
+    title: "BDE Performance",
+    description:
+      "BDE-wise leads, activities, follow-ups, meetings, proposals, won/lost deals, and revenue.",
+    apiType: "bde-performance",
+  },
+  {
+    slug: "sales-performance",
+    title: "Sales Performance",
+    description: "Monthly sales activity, conversion, and revenue summary.",
+    apiType: "monthly-summary",
+  },
+  {
+    slug: "lead-report",
+    title: "Lead Report",
+    description: "Lead details; the selected period is based on lead creation date.",
+    apiType: "leads",
+  },
+  {
+    slug: "won-lost-report",
+    title: "Won/Lost Report",
+    description: "Won and lost leads by the date they entered the outcome stage.",
+    apiType: "won-lost",
+  },
+  {
+    slug: "revenue-report",
+    title: "Revenue Report",
+    description: "Revenue details from won deals in the selected period.",
+    apiType: "revenue",
+  },
+  {
+    slug: "lead-aging-report",
+    title: "Lead Aging Report",
+    description:
+      "Current stage duration, latest activity, and next follow-up for leads.",
+    apiType: "lead-aging",
+  },
+  {
+    slug: "pipeline-report",
+    title: "Pipeline Report",
+    description: "Open leads organized by current pipeline stage.",
+    apiType: "pipeline",
+  },
+  {
+    slug: "follow-up-report",
+    title: "Follow-up Report",
+    description: "Today's, upcoming, overdue, and completed follow-ups.",
+    apiType: "follow-ups",
+  },
+  {
+    slug: "proposal-report",
+    title: "Proposal Report",
+    description: "Proposal details linked to their lead and assigned BDE.",
+    apiType: "proposals",
+  },
+  {
+    slug: "lost-lead-report",
+    title: "Lost Lead Report",
+    description: "Lost opportunities grouped by their recorded reason.",
+    apiType: "lost-leads",
+  },
 ] as const;
+
+const reportAccessStorageKey = (userId: string | undefined) =>
+  `durozen_report_last_accessed:${userId ?? "anonymous"}`;
+
+function readReportAccessTimes(userId: string | undefined) {
+  try {
+    const stored = window.localStorage.getItem(reportAccessStorageKey(userId));
+    const parsed: unknown = stored ? JSON.parse(stored) : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([, value]) =>
+          typeof value === "string" && !Number.isNaN(Date.parse(value)),
+      ),
+    ) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function formatReportAccessTime(value: string | undefined, now: number) {
+  if (!value) return "—";
+  const accessedAt = new Date(value);
+  const elapsedMinutes = Math.max(
+    0,
+    Math.floor((now - accessedAt.getTime()) / 60_000),
+  );
+  if (elapsedMinutes < 1) return "now";
+  if (elapsedMinutes < 60)
+    return `${elapsedMinutes} min${elapsedMinutes === 1 ? "" : "s"} ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24)
+    return `${elapsedHours} hr${elapsedHours === 1 ? "" : "s"} ago`;
+  return `${String(accessedAt.getDate()).padStart(2, "0")}/${String(
+    accessedAt.getMonth() + 1,
+  ).padStart(2, "0")}/${accessedAt.getFullYear()}`;
+}
+
+type ReportColumn = {
+  key: string;
+  label: string;
+  format?: "date" | "money" | "number" | "percent";
+};
+
+const reportColumns: Record<string, ReportColumn[]> = {
+  leads: [
+    { key: "customerName", label: "Lead Name" },
+    { key: "businessName", label: "Company" },
+    { key: "contactInformation", label: "Contact Information" },
+    { key: "leadSource", label: "Lead Source" },
+    { key: "assignedBde.fullName", label: "Assigned BDE" },
+    { key: "stage", label: "Current Stage" },
+    { key: "createdAt", label: "Created Date", format: "date" },
+    { key: "followUpAt", label: "Next Follow-up", format: "date" },
+  ],
+  "bde-performance": [
+    { key: "name", label: "BDE Name" },
+    { key: "totalLeads", label: "Total Leads", format: "number" },
+    { key: "contacted", label: "Contacted Leads", format: "number" },
+    { key: "interested", label: "Interested Leads", format: "number" },
+    {
+      key: "followUpsCompleted",
+      label: "Follow-ups Completed",
+      format: "number",
+    },
+    {
+      key: "overdueFollowUps",
+      label: "Overdue Follow-ups",
+      format: "number",
+    },
+    { key: "meetings", label: "Meetings", format: "number" },
+    { key: "proposals", label: "Proposals", format: "number" },
+    { key: "won", label: "Won Deals", format: "number" },
+    { key: "lost", label: "Lost Deals", format: "number" },
+    { key: "revenue", label: "Revenue Generated", format: "money" },
+  ],
+  pipeline: [
+    { key: "customerName", label: "Lead Name" },
+    { key: "businessName", label: "Company" },
+    { key: "assignedBde.fullName", label: "Assigned BDE" },
+    { key: "stage", label: "Pipeline Stage" },
+    { key: "leadSource", label: "Lead Source" },
+    { key: "estimatedBudget", label: "Expected Deal Value", format: "money" },
+    { key: "lastActivityAt", label: "Last Activity Date", format: "date" },
+    { key: "followUpAt", label: "Next Follow-up", format: "date" },
+    { key: "daysInCurrentStage", label: "Days in Stage", format: "number" },
+  ],
+  "lead-aging": [
+    { key: "customerName", label: "Lead Name" },
+    { key: "businessName", label: "Company" },
+    { key: "assignedBde.fullName", label: "Assigned BDE" },
+    { key: "stage", label: "Current Stage" },
+    { key: "daysInCurrentStage", label: "Days in Stage", format: "number" },
+    { key: "lastActivityAt", label: "Last Activity Date", format: "date" },
+    { key: "followUpAt", label: "Next Follow-up", format: "date" },
+  ],
+  "follow-ups": [
+    { key: "lead.customerName", label: "Lead Name" },
+    { key: "lead.businessName", label: "Company" },
+    { key: "lead.assignedBde.fullName", label: "Assigned BDE" },
+    { key: "dueAt", label: "Follow-up Date", format: "date" },
+    { key: "type", label: "Follow-up Type" },
+    { key: "status", label: "Status" },
+    { key: "nextAction", label: "Next Action" },
+    { key: "latestActivity", label: "Last Activity / Notes" },
+  ],
+  proposals: [
+    { key: "proposalNumber", label: "Proposal Number" },
+    { key: "lead.customerName", label: "Lead / Company" },
+    { key: "lead.assignedBde.fullName", label: "Assigned BDE" },
+    { key: "proposalDate", label: "Proposal Date", format: "date" },
+    { key: "finalAmount", label: "Proposal Value", format: "money" },
+    { key: "customerResponse", label: "Status / Response" },
+    { key: "validityUntil", label: "Valid Until", format: "date" },
+  ],
+  "won-lost": [
+    { key: "customerName", label: "Lead / Deal" },
+    { key: "businessName", label: "Company" },
+    { key: "assignedBde.fullName", label: "Assigned BDE" },
+    { key: "stage", label: "Final Outcome" },
+    { key: "stageEnteredAt", label: "Outcome Date", format: "date" },
+    { key: "finalDealValue", label: "Deal Value", format: "money" },
+    { key: "lostReason", label: "Lost Reason" },
+  ],
+  revenue: [
+    { key: "stageEnteredAt", label: "Won Date", format: "date" },
+    { key: "customerName", label: "Won Deal / Lead" },
+    { key: "businessName", label: "Company" },
+    { key: "assignedBde.fullName", label: "Assigned BDE" },
+    { key: "finalDealValue", label: "Revenue", format: "money" },
+  ],
+  "lost-leads": [
+    { key: "customerName", label: "Lead / Deal" },
+    { key: "businessName", label: "Company" },
+    { key: "assignedBde.fullName", label: "Assigned BDE" },
+    { key: "stageEnteredAt", label: "Lost Date", format: "date" },
+    { key: "lostReason", label: "Lost Reason / Category" },
+    { key: "finalDealValue", label: "Deal Value", format: "money" },
+  ],
+  "monthly-summary": [
+    { key: "month", label: "Month" },
+    { key: "totalLeads", label: "Total Leads", format: "number" },
+    { key: "contacted", label: "Contacted Leads", format: "number" },
+    { key: "interested", label: "Interested Leads", format: "number" },
+    { key: "meetings", label: "Meetings", format: "number" },
+    { key: "proposals", label: "Proposals", format: "number" },
+    { key: "negotiations", label: "Negotiations", format: "number" },
+    { key: "won", label: "Won Deals", format: "number" },
+    { key: "lost", label: "Lost Deals", format: "number" },
+    { key: "revenue", label: "Revenue", format: "money" },
+    { key: "conversionRate", label: "Conversion Rate", format: "percent" },
+  ],
+};
 
 const money = (value: string | number) =>
   new Intl.NumberFormat("en-IN", {
@@ -61,34 +321,43 @@ const localDate = (date: Date) => {
   return local.toISOString().slice(0, 10);
 };
 
-function flatten(value: unknown, prefix = ""): ReportRow {
-  if (!value || typeof value !== "object" || value instanceof Date)
-    return prefix
-      ? { [prefix]: value instanceof Date ? value.toLocaleString() : value }
-      : {};
-  if (Array.isArray(value)) return prefix ? { [prefix]: value.length } : {};
-  const output: ReportRow = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "activities" || key === "followUps") continue;
-    const label = prefix ? `${prefix} ${key}` : key;
-    if (child && typeof child === "object" && !(child instanceof Date))
-      Object.assign(output, flatten(child, label));
-    else output[label] = child instanceof Date ? child.toLocaleString() : child;
+function reportValue(row: ReportRow, key: string): unknown {
+  if (key === "contactInformation") {
+    return [row.mobileNumber, row.email].filter(Boolean).join(" · ") || null;
   }
-  return output;
+  if (key === "latestActivity") {
+    const lead = row.lead as ReportRow | undefined;
+    const activities = lead?.activities as ReportRow[] | undefined;
+    return row.remarks ?? activities?.[0]?.description ?? null;
+  }
+  return key.split(".").reduce<unknown>((value, part) => {
+    if (!value || typeof value !== "object") return undefined;
+    return (value as ReportRow)[part];
+  }, row);
+}
+
+function formatReportValue(value: unknown, format?: ReportColumn["format"]) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (format === "date") {
+    const date = new Date(String(value));
+    return Number.isNaN(date.getTime())
+      ? String(value)
+      : new Intl.DateTimeFormat("en-IN").format(date);
+  }
+  if (format === "money") return money(String(value));
+  if (format === "percent") return `${String(value)}%`;
+  return String(value);
 }
 
 async function downloadReport(
   type: string,
   format: "pdf" | "xlsx",
-  from: string,
-  to: string,
+  filters: Record<string, string>,
 ) {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
   const query = new URLSearchParams({
     format,
-    ...(from ? { from } : {}),
-    ...(to ? { to } : {}),
+    ...filters,
   });
   const response = await fetch(`${apiUrl}/exports/${type}?${query}`, {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
@@ -130,8 +399,7 @@ export function MonthlySummaryWorkspace() {
       await downloadReport(
         "monthly-summary",
         format,
-        `${month}-01`,
-        localDate(nextMonth),
+        { from: `${month}-01`, to: localDate(nextMonth) },
       );
     } catch (reason) {
       const message =
@@ -330,27 +598,251 @@ export function PerformanceWorkspace() {
 }
 
 export function ReportsWorkspace() {
-  const [type, setType] = useState<(typeof reportTypes)[number][0]>("leads");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [lastAccessed, setLastAccessed] = useState<Record<string, string>>({});
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
+  const pageSize = 10;
+  const userId = getAuthUser()?.id;
+  const filteredReports = reportTypes.filter((report) =>
+    `${report.title} ${report.description}`
+      .toLocaleLowerCase()
+      .includes(search.trim().toLocaleLowerCase()),
+  );
+  const totalPages = Math.max(1, Math.ceil(filteredReports.length / pageSize));
+  const visibleReports = filteredReports.slice(
+    (page - 1) * pageSize,
+    page * pageSize,
+  );
+
+  useEffect(() => {
+    const refreshAccessTimes = () => {
+      setLastAccessed(readReportAccessTimes(userId));
+      setCurrentTime(Date.now());
+    };
+    refreshAccessTimes();
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 60_000);
+    window.addEventListener("storage", refreshAccessTimes);
+    window.addEventListener("durozen-report-access-updated", refreshAccessTimes);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("storage", refreshAccessTimes);
+      window.removeEventListener(
+        "durozen-report-access-updated",
+        refreshAccessTimes,
+      );
+    };
+  }, [userId]);
+
+  return (
+    <main className="lead-workspace report-workspace">
+      <header className="workspace-header">
+        <div>
+          <p className="eyebrow">MANAGEMENT INSIGHTS</p>
+          <h1>Reports</h1>
+          <p className="subtitle">Select a report to view its CRM data.</p>
+        </div>
+        <input
+          aria-label="Search reports"
+          className="reports-list-search"
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setPage(1);
+          }}
+          placeholder="Search reports"
+          type="search"
+          value={search}
+        />
+      </header>
+      <div className="lead-table-wrap report-table-wrap reports-list-wrap">
+        <table className="lead-table reports-list-table">
+          <colgroup>
+            <col className="reports-name-column" />
+            <col className="reports-description-column" />
+            <col className="reports-accessed-column" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">Report Name</th>
+              <th scope="col">Description</th>
+              <th scope="col">Last Accessed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleReports.map((report) => (
+              <tr key={report.slug}>
+                <td>
+                  <Link href={`/reports/${report.slug}`}>{report.title}</Link>
+                </td>
+                <td title={report.description}>{report.description}</td>
+                <td>
+                  {formatReportAccessTime(lastAccessed[report.slug], currentTime)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filteredReports.length === 0 && (
+          <div className="empty-list">No reports found</div>
+        )}
+      </div>
+      <ReportPagination
+        page={page}
+        pageSize={pageSize}
+        totalRows={filteredReports.length}
+        label="Reports pages"
+        onPageChange={(nextPage) =>
+          setPage(Math.min(totalPages, Math.max(1, nextPage)))
+        }
+      />
+    </main>
+  );
+}
+
+export function ReportDetailWorkspace() {
+  const params = useParams<{ type: string }>();
+  const report = reportTypes.find(({ slug }) => slug === params.type);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [stage, setStage] = useState("");
+  const [followUpCategory, setFollowUpCategory] = useState("");
+  const [followUpStatus, setFollowUpStatus] = useState("");
+  const [lostReason, setLostReason] = useState("");
+  const [assignedBdeId, setAssignedBdeId] = useState("");
+  const [bdeOptions, setBdeOptions] = useState<BdeOption[]>([]);
   const [rows, setRows] = useState<ReportRow[]>([]);
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const user = getAuthUser();
-  const restricted = user?.role === "BDE";
+  const restricted =
+    user?.role === "BDE" &&
+    report !== undefined &&
+    ![
+      "bde-performance",
+      "sales-performance",
+      "follow-up-report",
+    ].includes(report.slug);
 
   useEffect(() => {
-    if (restricted) return;
-    setLoading(true);
-    setError("");
-    const query = new URLSearchParams({
+    if (!report || restricted) return;
+    const key = reportAccessStorageKey(user?.id);
+    const accessTimes = readReportAccessTimes(user?.id);
+    accessTimes[report.slug] = new Date().toISOString();
+    window.localStorage.setItem(key, JSON.stringify(accessTimes));
+    window.dispatchEvent(new Event("durozen-report-access-updated"));
+  }, [report, restricted, user?.id]);
+
+  const filters = useMemo(
+    () => ({
       ...(from ? { from } : {}),
       ...(to ? { to } : {}),
-    });
-    apiClient<ReportRow[]>(`/reports/${type}?${query}`)
-      .then(setRows)
+      ...(assignedBdeId &&
+      report?.apiType !== "monthly-summary" &&
+      user?.role !== "BDE"
+        ? { assignedBdeId }
+        : {}),
+      ...(stage &&
+      ["leads", "pipeline", "won-lost", "lead-aging"].includes(
+        report?.apiType ?? "",
+      )
+        ? { stage }
+        : {}),
+      ...(followUpCategory && report?.apiType === "follow-ups"
+        ? { category: followUpCategory }
+        : {}),
+      ...(followUpStatus && report?.apiType === "follow-ups"
+        ? { status: followUpStatus }
+        : {}),
+      ...(lostReason &&
+      ["won-lost", "lost-leads"].includes(report?.apiType ?? "")
+        ? { lostReason }
+        : {}),
+    }),
+    [
+      followUpCategory,
+      followUpStatus,
+      from,
+      assignedBdeId,
+      lostReason,
+      report,
+      stage,
+      to,
+      user?.role,
+    ],
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, month, report]);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const visibleRows = rows.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    if (
+      !report ||
+      user?.role === "BDE" ||
+      report.apiType === "monthly-summary"
+    ) {
+      setBdeOptions([]);
+      return;
+    }
+    let cancelled = false;
+    apiClient<BdeOption[]>("/reports/bde-options")
+      .then((options) => {
+        if (!cancelled) setBdeOptions(options);
+      })
       .catch((reason: unknown) => {
+        if (cancelled) return;
+        const message =
+          reason instanceof Error
+            ? reason.message
+            : "Unable to load BDE filters.";
+        notify(message, "error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [report, user?.role]);
+
+  useEffect(() => {
+    if (!report || restricted) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
+
+    const activeReport = report;
+    let cancelled = false;
+    async function loadReport() {
+      setLoading(true);
+      setError("");
+      setRows([]);
+      try {
+        if (activeReport.slug === "sales-performance") {
+          const summary = await apiClient<MonthlySummary>(
+            `/reports/monthly-summary?month=${month}`,
+          );
+          if (!cancelled) setRows([{ ...summary }]);
+        } else {
+          const query = new URLSearchParams({
+            ...filters,
+          });
+          const data = await apiClient<ReportRow[]>(
+            `/reports/${activeReport.apiType}?${query}`,
+          );
+          if (!cancelled) setRows(data);
+        }
+      } catch (reason: unknown) {
+        if (cancelled) return;
         setRows([]);
         const message =
           reason instanceof Error
@@ -358,15 +850,35 @@ export function ReportsWorkspace() {
             : "Unable to load this report.";
         setError(message);
         notify(message, "error");
-      })
-      .finally(() => setLoading(false));
-  }, [type, from, to, restricted]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadReport();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    filters,
+    month,
+    report,
+    restricted,
+  ]);
 
   async function exportFile(format: "pdf" | "xlsx") {
+    if (!report) return;
     setBusy(true);
     setError("");
+    let exportFilters = filters;
+    if (report.slug === "sales-performance") {
+      const monthEnd = new Date(`${month}-01T00:00:00`);
+      monthEnd.setMonth(monthEnd.getMonth() + 1);
+      monthEnd.setDate(0);
+      exportFilters = { from: `${month}-01`, to: localDate(monthEnd) };
+    }
     try {
-      await downloadReport(type, format, from, to);
+      await downloadReport(report.apiType, format, exportFilters);
     } catch (reason) {
       const message =
         reason instanceof Error ? reason.message : "Unable to export report.";
@@ -377,106 +889,295 @@ export function ReportsWorkspace() {
     }
   }
 
-  const flatRows = rows.map((row) => flatten(row));
-  const columns = [...new Set(flatRows.flatMap((row) => Object.keys(row)))]
-    .filter((column) => column !== "id")
-    .slice(0, 12);
-  return (
-    <main className="lead-workspace report-workspace">
-      <header className="workspace-header">
-        <div>
-          <p className="eyebrow">MANAGEMENT INSIGHTS</p>
-          <h1>Reports</h1>
-          <p className="subtitle">
-            Review CRM records by date and export the selected dataset.
+  if (!report) {
+    return (
+      <main className="lead-workspace report-workspace">
+        <section className="panel report-restricted">
+          <h2>Report not found</h2>
+          <p>
+            <Link href="/reports">Return to Reports</Link>
           </p>
-        </div>
-        <div className="date-range-controls">
-          <label>
-            From
-            <input
-              type="date"
-              value={from}
-              onChange={(event) => setFrom(event.target.value)}
-            />
-          </label>
-          <label>
-            To
-            <input
-              type="date"
-              value={to}
-              onChange={(event) => setTo(event.target.value)}
-            />
-          </label>
-        </div>
-      </header>
-      {restricted ? (
+        </section>
+      </main>
+    );
+  }
+
+  if (restricted) {
+    return (
+      <main className="lead-workspace report-workspace">
+        <header className="workspace-header">
+          <div>
+            <p className="eyebrow">MANAGEMENT INSIGHTS</p>
+            <h1>{report.title}</h1>
+          </div>
+        </header>
         <section className="panel report-restricted">
           <h2>Management reports are restricted</h2>
           <p>
             Your own results are available in{" "}
-            <Link href="/performance">BDE performance</Link>.
+            <Link href="/reports/bde-performance">BDE Performance</Link>.
           </p>
         </section>
-      ) : (
-        <>
-          <div className="report-toolbar">
+      </main>
+    );
+  }
+
+  const columns = reportColumns[report.apiType] ?? [];
+  const canExport = user?.role !== "BDE";
+  const summaryMetrics =
+    report.apiType === "revenue"
+      ? [
+          ["Won deals", rows.length],
+          [
+            "Total revenue",
+            money(
+              rows.reduce(
+                (sum, row) => sum + Number(row.finalDealValue ?? 0),
+                0,
+              ),
+            ),
+          ],
+        ]
+      : report.apiType === "lost-leads"
+        ? [["Lost leads", rows.length]]
+        : [];
+
+  return (
+    <main
+      className="lead-workspace report-workspace report-print-area"
+      data-print-orientation={columns.length > 6 ? "landscape" : "portrait"}
+    >
+      <header className="workspace-header">
+        <div>
+          <p className="eyebrow">MANAGEMENT INSIGHTS</p>
+          <h1>{report.title}</h1>
+          <p className="subtitle">{report.description}</p>
+          <p className="report-print-meta">
+            {report.slug === "sales-performance"
+              ? `Month: ${month}`
+              : `Date range: ${from || "Any"} to ${to || "Any"}`}
+            {assignedBdeId
+              ? ` · BDE: ${bdeOptions.find((option) => option.id === assignedBdeId)?.fullName ?? assignedBdeId}`
+              : ""}
+            {stage ? ` · Stage: ${stage}` : ""}
+            {followUpCategory
+              ? ` · Follow-up: ${followUpCategory}`
+              : ""}
+            {followUpStatus ? ` · Status: ${followUpStatus}` : ""}
+            {lostReason ? ` · Lost reason: ${lostReason}` : ""}
+          </p>
+        </div>
+        {report.slug === "sales-performance" ? (
+          <label className="period-control">
+            Month
+            <input
+              type="month"
+              value={month}
+              onChange={(event) => setMonth(event.target.value)}
+            />
+          </label>
+        ) : (
+          <div className="date-range-controls">
             <label>
-              Report
+              From
+              <input
+                type="date"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+              />
+            </label>
+            <label>
+              To
+              <input
+                type="date"
+                value={to}
+                onChange={(event) => setTo(event.target.value)}
+              />
+            </label>
+          </div>
+        )}
+      </header>
+      <div className="report-toolbar report-screen-controls">
+        <div>
+          <Link className="secondary-action" href="/reports">
+            All reports
+          </Link>
+          {bdeOptions.length > 0 && (
+            <label>
+              BDE
               <select
-                value={type}
-                onChange={(event) => setType(event.target.value as typeof type)}
+                onChange={(event) => setAssignedBdeId(event.target.value)}
+                value={assignedBdeId}
               >
-                {reportTypes.map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
+                <option value="">All BDEs</option>
+                {bdeOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.fullName}
                   </option>
                 ))}
               </select>
             </label>
-            <div>
+          )}
+          {["leads", "pipeline", "won-lost", "lead-aging"].includes(
+            report.apiType,
+          ) && (
+            <label>
+              Stage
+              <select
+                onChange={(event) => setStage(event.target.value)}
+                value={stage}
+              >
+                <option value="">All stages</option>
+                {(report.apiType === "won-lost"
+                  ? ["WON", "LOST"]
+                  : report.apiType === "leads"
+                    ? [
+                        "NEW_LEAD",
+                        "CONTACTED",
+                        "INTERESTED",
+                        "MEETING",
+                        "PROPOSAL",
+                        "NEGOTIATION",
+                        "WON",
+                        "LOST",
+                      ]
+                    : [
+                        "NEW_LEAD",
+                        "CONTACTED",
+                        "INTERESTED",
+                        "MEETING",
+                        "PROPOSAL",
+                        "NEGOTIATION",
+                      ]
+                ).map((option) => (
+                  <option key={option} value={option}>
+                    {option.replaceAll("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {report.apiType === "follow-ups" && (
+            <>
+              <label>
+                Follow-up
+                <select
+                  onChange={(event) => setFollowUpCategory(event.target.value)}
+                  value={followUpCategory}
+                >
+                  <option value="">All follow-ups</option>
+                  <option value="today">Today</option>
+                  <option value="upcoming">Upcoming</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select
+                  onChange={(event) => setFollowUpStatus(event.target.value)}
+                  value={followUpStatus}
+                >
+                  <option value="">All statuses</option>
+                  {["PENDING", "COMPLETED", "RESCHEDULED", "CANCELLED"].map(
+                    (option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
+            </>
+          )}
+          {["lost-leads", "won-lost"].includes(report.apiType) && (
+            <label>
+              Lost reason
+              <input
+                onChange={(event) => setLostReason(event.target.value)}
+                placeholder="Filter lost reason"
+                type="search"
+                value={lostReason}
+              />
+            </label>
+          )}
+        </div>
+        <div>
+          {canExport && (
+            <>
               <button disabled={busy} onClick={() => void exportFile("pdf")}>
                 ↓ PDF
               </button>
               <button disabled={busy} onClick={() => void exportFile("xlsx")}>
                 ↓ Excel
               </button>
-              <button onClick={() => window.print()}>Print</button>
-            </div>
-          </div>
-          {loading && (
-            <p className="dashboard-loading">Loading report data...</p>
+            </>
           )}
-          <div className="lead-table-wrap report-table-wrap">
-            <table className="lead-table">
-              <thead>
-                <tr>
-                  {columns.map((column) => (
-                    <th key={column}>{column.replaceAll("_", " ")}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {flatRows.map((row, index) => (
-                  <tr key={String(row.id ?? index)}>
-                    {columns.map((column) => (
-                      <td key={column}>
-                        {row[column] === null || row[column] === undefined
-                          ? "—"
-                          : String(row[column])}
-                      </td>
-                    ))}
-                  </tr>
+          <button onClick={() => window.print()}>Print</button>
+        </div>
+      </div>
+      {summaryMetrics.length > 0 && (
+        <div className="summary-metrics report-summary-metrics">
+          {summaryMetrics.map(([label, value]) => (
+            <article className="summary-metric" key={String(label)}>
+              <span>{label}</span>
+              <strong>{value}</strong>
+            </article>
+          ))}
+        </div>
+      )}
+      {loading && <p className="dashboard-loading">Loading report data...</p>}
+      <div className="lead-table-wrap report-table-wrap">
+        <table className="lead-table">
+          <thead>
+            <tr>
+              {columns.map((column) => (
+                <th key={column.key}>{column.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleRows.map((row, index) => (
+              <tr key={String(row.id ?? row.userId ?? index)}>
+                {columns.map((column) => (
+                  <td key={column.key} title={String(reportValue(row, column.key) ?? "")}>
+                    {formatReportValue(
+                      reportValue(row, column.key),
+                      column.format,
+                    )}
+                  </td>
                 ))}
-              </tbody>
-            </table>
-            {!loading && !error && rows.length === 0 && (
-              <div className="empty-list">
-                No records for this report and date range.
-              </div>
-            )}
-          </div>
-        </>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!loading && !error && rows.length === 0 && (
+          <div className="empty-list">No records for this report.</div>
+        )}
+        {error && <div className="empty-list">{error}</div>}
+      </div>
+      <ReportPagination
+        page={page}
+        pageSize={pageSize}
+        totalRows={rows.length}
+        label={`${report.title} pages`}
+        onPageChange={(nextPage) =>
+          setPage(Math.min(totalPages, Math.max(1, nextPage)))
+        }
+      />
+      {report.apiType === "lost-leads" && rows.length > 0 && (
+        <section className="panel report-reason-summary">
+          <h2>Lost reasons</h2>
+          {[...rows.reduce((counts, row) => {
+            const reason = String(row.lostReason ?? "Not recorded");
+            counts.set(reason, (counts.get(reason) ?? 0) + 1);
+            return counts;
+          }, new Map<string, number>())].map(([reason, count]) => (
+            <p key={reason}>
+              {reason}: {count}
+            </p>
+          ))}
+        </section>
       )}
     </main>
   );

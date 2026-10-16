@@ -1,38 +1,248 @@
-export type FlatRow = Record<string, string | number | boolean | null>;
+export type ReportColumn = {
+  key: string;
+  label: string;
+  weight: number;
+  format?: "date" | "money" | "number" | "percent";
+  value: (row: Record<string, unknown>) => unknown;
+};
 
-export function flattenRow(value: unknown, prefix = ""): FlatRow {
-  if (!value || typeof value !== "object" || value instanceof Date) {
-    return prefix
-      ? {
-          [prefix]:
-            value instanceof Date
-              ? value.toISOString()
-              : (value as string | number | boolean | null),
-        }
-      : {};
+export type ReportTable = {
+  columns: ReportColumn[];
+  rows: Record<string, unknown>[];
+  summary: { label: string; value: number | string; format?: ReportColumn["format"] }[];
+};
+
+const field =
+  (path: string) =>
+  (row: Record<string, unknown>): unknown =>
+    path.split(".").reduce<unknown>((value, part) => {
+      if (!value || typeof value !== "object") return undefined;
+      return (value as Record<string, unknown>)[part];
+    }, row);
+
+const column = (
+  key: string,
+  label: string,
+  weight: number,
+  format?: ReportColumn["format"],
+  value = field(key),
+): ReportColumn => ({ key, label, weight, format, value });
+
+const assignedBde = column(
+  "assignedBde.fullName",
+  "Assigned BDE",
+  1.1,
+  undefined,
+  field("assignedBde.fullName"),
+);
+const leadBde = column(
+  "lead.assignedBde.fullName",
+  "Assigned BDE",
+  1.1,
+  undefined,
+  field("lead.assignedBde.fullName"),
+);
+const leadName = column(
+  "customerName",
+  "Lead / Deal",
+  1.2,
+  undefined,
+  field("customerName"),
+);
+const leadCompany = column(
+  "businessName",
+  "Company",
+  1.1,
+  undefined,
+  field("businessName"),
+);
+
+const definitions: Record<string, ReportColumn[]> = {
+  leads: [
+    column("customerName", "Lead Name", 1.2),
+    leadCompany,
+    column(
+      "contactInformation",
+      "Contact Information",
+      1.4,
+      undefined,
+      (row) =>
+        [row.mobileNumber, row.email].filter(Boolean).join(" · ") || null,
+    ),
+    column("leadSource", "Lead Source", 0.9),
+    assignedBde,
+    column("stage", "Current Stage", 0.9),
+    column("createdAt", "Created Date", 1, "date"),
+    column("followUpAt", "Next Follow-up", 1, "date"),
+  ],
+  "bde-performance": [
+    column("name", "BDE Name", 1.2),
+    column("totalLeads", "Total Leads", 0.8, "number"),
+    column("contacted", "Contacted Leads", 0.9, "number"),
+    column("interested", "Interested Leads", 0.9, "number"),
+    column("followUpsCompleted", "Follow-ups Completed", 1.1, "number"),
+    column("overdueFollowUps", "Overdue Follow-ups", 1.1, "number"),
+    column("meetings", "Meetings", 0.8, "number"),
+    column("proposals", "Proposals", 0.8, "number"),
+    column("won", "Won Deals", 0.8, "number"),
+    column("lost", "Lost Deals", 0.8, "number"),
+    column("revenue", "Revenue Generated", 1.1, "money"),
+  ],
+  pipeline: [
+    leadName,
+    leadCompany,
+    assignedBde,
+    column("stage", "Pipeline Stage", 1),
+    column("leadSource", "Lead Source", 0.9),
+    column("estimatedBudget", "Expected Deal Value", 1.1, "money"),
+    column("lastActivityAt", "Last Activity Date", 1, "date"),
+    column("followUpAt", "Next Follow-up", 1, "date"),
+    column("daysInCurrentStage", "Days in Stage", 0.8, "number"),
+  ],
+  "lead-aging": [
+    leadName,
+    leadCompany,
+    assignedBde,
+    column("stage", "Current Stage", 0.9),
+    column("daysInCurrentStage", "Days in Stage", 0.8, "number"),
+    column("lastActivityAt", "Last Activity Date", 1, "date"),
+    column("followUpAt", "Next Follow-up", 1, "date"),
+  ],
+  "follow-ups": [
+    column("lead.customerName", "Lead Name", 1.2),
+    column("lead.businessName", "Company", 1.1),
+    leadBde,
+    column("dueAt", "Follow-up Date", 1, "date"),
+    column("type", "Follow-up Type", 0.9),
+    column("status", "Status", 0.8),
+    column("nextAction", "Next Action", 1.2),
+    column(
+      "latestActivity",
+      "Last Activity / Notes",
+      1.5,
+      undefined,
+      (row) => {
+        const lead = row.lead as Record<string, unknown> | undefined;
+        const activities = lead?.activities as
+          | Record<string, unknown>[]
+          | undefined;
+        return row.remarks ?? activities?.[0]?.description ?? null;
+      },
+    ),
+  ],
+  proposals: [
+    column("proposalNumber", "Proposal Number", 1),
+    column("lead.customerName", "Lead / Company", 1.2),
+    leadBde,
+    column("proposalDate", "Proposal Date", 1, "date"),
+    column("finalAmount", "Proposal Value", 1, "money"),
+    column("customerResponse", "Status / Response", 1.2),
+    column("validityUntil", "Valid Until", 1, "date"),
+  ],
+  "won-lost": [
+    leadName,
+    leadCompany,
+    assignedBde,
+    column("stage", "Final Outcome", 0.9),
+    column("stageEnteredAt", "Outcome Date", 1, "date"),
+    column("finalDealValue", "Deal Value", 1, "money"),
+    column("lostReason", "Lost Reason", 1.4),
+  ],
+  revenue: [
+    column("stageEnteredAt", "Won Date", 1, "date"),
+    leadName,
+    leadCompany,
+    assignedBde,
+    column("finalDealValue", "Revenue", 1, "money"),
+  ],
+  "lost-leads": [
+    leadName,
+    leadCompany,
+    assignedBde,
+    column("stageEnteredAt", "Lost Date", 1, "date"),
+    column("lostReason", "Lost Reason / Category", 1.4),
+    column("finalDealValue", "Deal Value", 1, "money"),
+  ],
+  "monthly-summary": [
+    column("month", "Month", 1),
+    column("totalLeads", "Total Leads", 0.9, "number"),
+    column("contacted", "Contacted Leads", 1, "number"),
+    column("interested", "Interested Leads", 1, "number"),
+    column("meetings", "Meetings", 0.8, "number"),
+    column("proposals", "Proposals", 0.8, "number"),
+    column("negotiations", "Negotiations", 0.9, "number"),
+    column("won", "Won Deals", 0.8, "number"),
+    column("lost", "Lost Deals", 0.8, "number"),
+    column("revenue", "Revenue", 1, "money"),
+    column("conversionRate", "Conversion Rate", 1, "percent"),
+  ],
+};
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+
+const asNumber = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return 0;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+};
+
+export function buildReportTable(
+  rows: unknown[],
+  type: string,
+): ReportTable {
+  const columns = definitions[type];
+  if (!columns) throw new Error(`No export columns configured for ${type}`);
+  const records = rows.map(asRecord);
+  const tableRows = records.map((row) =>
+    Object.fromEntries(columns.map(({ key, value }) => [key, value(row)])),
+  );
+  const summary: ReportTable["summary"] = [];
+  if (type === "revenue") {
+    const total = records.reduce(
+      (sum, row) => sum + asNumber(row.finalDealValue),
+      0,
+    );
+    summary.push(
+      { label: "Won deals", value: records.length, format: "number" },
+      { label: "Total revenue", value: total, format: "money" },
+    );
   }
-  if (Object.getPrototypeOf(value)?.constructor?.name === "Decimal") {
-    return prefix ? { [prefix]: String(value) } : {};
-  }
-  const output: FlatRow = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (child === undefined) continue;
-    const name = prefix ? `${prefix}_${key}` : key;
-    if (
-      child &&
-      typeof child === "object" &&
-      !Array.isArray(child) &&
-      !(child instanceof Date)
-    ) {
-      Object.assign(output, flattenRow(child, name));
-    } else if (Array.isArray(child)) {
-      output[name] = child.map((item) => String(item)).join(", ");
-    } else {
-      output[name] =
-        child instanceof Date
-          ? child.toISOString()
-          : (child as string | number | boolean | null);
+  if (type === "lost-leads") {
+    const counts = new Map<string, number>();
+    for (const row of records) {
+      const reason = String(row.lostReason ?? "Not recorded");
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
     }
+    summary.push(
+      ...[...counts.entries()].map(([reason, count]) => ({
+        label: reason,
+        value: count,
+        format: "number" as const,
+      })),
+    );
   }
-  return output;
+  return { columns, rows: tableRows, summary };
+}
+
+export function formatReportValue(value: unknown, format?: ReportColumn["format"]) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (format === "date") {
+    const date = value instanceof Date ? value : new Date(String(value));
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString("en-IN");
+  }
+  if (format === "money") {
+    const number = Number(value);
+    return Number.isFinite(number)
+      ? new Intl.NumberFormat("en-IN", {
+          style: "currency",
+          currency: "INR",
+          maximumFractionDigits: 2,
+        }).format(number)
+      : String(value);
+  }
+  if (format === "percent") return `${value}%`;
+  return String(value);
 }
