@@ -10,10 +10,13 @@ import {
   Prisma,
 } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { formatBusinessDateTime } from "../../common/business-time";
+import { assertNoScheduledMeeting } from "../../common/scheduled-meeting";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateMeetingDto } from "./dto/create-meeting.dto";
+import { CompleteMeetingDto } from "./dto/complete-meeting.dto";
 import { LogMeetingDto } from "./dto/log-meeting.dto";
 import { UpdateMeetingDto } from "./dto/update-meeting.dto";
 
@@ -61,17 +64,22 @@ export class MeetingsService {
     if (from) meetingAt.gte = this.parseDateBoundary(from, false);
     if (to) meetingAt.lt = this.parseDateBoundary(to, true);
 
-    let status: MeetingStatus | undefined;
-    if (filters.status && filters.status !== "ALL") {
-      if (!Object.values(MeetingStatus).includes(filters.status as MeetingStatus)) {
-        throw new BadRequestException("Unknown meeting status");
-      }
-      status = filters.status as MeetingStatus;
+    const statuses = filters.status
+      ?.split(",")
+      .filter((status) => status && status !== "ALL") as
+      | MeetingStatus[]
+      | undefined;
+    if (
+      statuses?.some(
+        (status) => !Object.values(MeetingStatus).includes(status),
+      )
+    ) {
+      throw new BadRequestException("Unknown meeting status");
     }
     const search = filters.search?.trim();
     const where: Prisma.MeetingWhereInput = {
       ...(Object.keys(meetingAt).length ? { meetingAt } : {}),
-      ...(status ? { status } : {}),
+      ...(statuses?.length ? { status: { in: statuses } } : {}),
       lead: {
         ...leadScope(user),
         ...(search
@@ -127,6 +135,7 @@ export class MeetingsService {
     this.requireLeadNextAction(lead.stage, dto.nextAction, followUpAt);
 
     return this.prisma.$transaction(async (tx) => {
+      await assertNoScheduledMeeting(tx, lead.id);
       const meeting = await tx.meeting.create({
         data: {
           leadId: lead.id,
@@ -160,7 +169,7 @@ export class MeetingsService {
           meetingId: meeting.id,
           userId: user.sub,
           type: "MEETING_SCHEDULED",
-          description: `${dto.type} scheduled for ${meetingAt.toISOString()}`,
+          description: `${dto.type} scheduled for ${formatBusinessDateTime(meetingAt)}`,
         },
       });
       await tx.followUp.create({
@@ -342,7 +351,7 @@ export class MeetingsService {
           meetingId: id,
           userId: user.sub,
           type: "MEETING_RESCHEDULED",
-          description: `Meeting rescheduled from ${existing.meetingAt.toISOString()} to ${meetingAt.toISOString()}`,
+          description: `Meeting rescheduled from ${formatBusinessDateTime(existing.meetingAt)} to ${formatBusinessDateTime(meetingAt)}`,
         },
       });
       return tx.meeting.findUniqueOrThrow({
@@ -352,17 +361,54 @@ export class MeetingsService {
     });
   }
 
-  async complete(id: string, user: Actor) {
+  async complete(id: string, dto: CompleteMeetingDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE"]);
     const existing = await this.findAccessible(id, user);
     if (existing.status === MeetingStatus.COMPLETED) return existing;
     this.requireScheduled(existing.status);
 
+    const isLost = dto.nextAction === "Lost";
+    if (!dto.requirement.trim()) {
+      throw new BadRequestException("Meeting requirement is required.");
+    }
+    if (dto.nextAction === "Proposal" && !dto.followUpAt) {
+      throw new BadRequestException(
+        "A next follow-up date is required for the Proposal Follow-up task.",
+      );
+    }
+    if (dto.nextAction === "Lost" && !dto.lostReason?.trim()) {
+      throw new BadRequestException(
+        "A lost reason is required when moving the lead to Lost.",
+      );
+    }
+    const followUpAt = dto.followUpAt ? new Date(dto.followUpAt) : undefined;
+    if (followUpAt && Number.isNaN(followUpAt.getTime())) {
+      throw new BadRequestException("Choose a valid next follow-up date.");
+    }
+    if (followUpAt && followUpAt.getTime() <= Date.now()) {
+      throw new BadRequestException(
+        "The next follow-up date must be in the future.",
+      );
+    }
+    if (isLost) {
+      this.transitions.assertAllowed(
+        existing.lead.stage as LeadStage,
+        LeadStage.LOST,
+      );
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const completedAt = new Date();
       const changed = await tx.meeting.updateMany({
         where: { id, status: MeetingStatus.SCHEDULED, lead: leadScope(user) },
-        data: { status: MeetingStatus.COMPLETED, completedAt },
+        data: {
+          status: MeetingStatus.COMPLETED,
+          completedAt,
+          requirement: dto.requirement.trim(),
+          budget: dto.budget,
+          discussionNotes: dto.discussionNotes?.trim() || undefined,
+          ...(followUpAt ? { followUpAt } : {}),
+        },
       });
       if (changed.count === 0) {
         const current = await tx.meeting.findFirst({
@@ -381,9 +427,68 @@ export class MeetingsService {
           meetingId: id,
           userId: user.sub,
           type: "MEETING_COMPLETED",
-          description: `Meeting completed at ${completedAt.toISOString()}`,
+          description: `Meeting completed at ${formatBusinessDateTime(completedAt)}`,
         },
       });
+      await tx.followUp.updateMany({
+        where: {
+          meetingId: id,
+          status: FollowUpStatus.PENDING,
+          type: "Meeting",
+        },
+        data: { status: FollowUpStatus.COMPLETED },
+      });
+
+      if (!isLost && followUpAt) {
+        const nextAction = "Follow up on proposal";
+        await tx.followUp.create({
+          data: {
+            leadId: existing.leadId,
+            meetingId: id,
+            dueAt: followUpAt,
+            type: "Proposal Follow-up",
+            nextAction,
+          },
+        });
+        await tx.lead.update({
+          where: { id: existing.leadId },
+          data: {
+            requirement: dto.requirement.trim(),
+            estimatedBudget: dto.budget,
+            remarks: dto.discussionNotes?.trim() || undefined,
+            nextAction,
+            followUpAt,
+          },
+        });
+      } else {
+        await tx.lead.update({
+          where: { id: existing.leadId },
+          data: {
+            stage: LeadStage.LOST,
+            stageEnteredAt: new Date(),
+            requirement: dto.requirement.trim(),
+            estimatedBudget: dto.budget,
+            remarks: dto.discussionNotes?.trim() || undefined,
+            lostReason: dto.lostReason!.trim(),
+            nextAction: null,
+            followUpAt: null,
+          },
+        });
+        await tx.followUp.updateMany({
+          where: {
+            leadId: existing.leadId,
+            status: FollowUpStatus.PENDING,
+          },
+          data: { status: FollowUpStatus.CANCELLED },
+        });
+        await tx.callMessage.updateMany({
+          where: {
+            leadId: existing.leadId,
+            status: FollowUpStatus.PENDING,
+          },
+          data: { status: FollowUpStatus.CANCELLED },
+        });
+      }
       return tx.meeting.findUniqueOrThrow({
         where: { id },
         include: meetingInclude,
@@ -466,10 +571,16 @@ export class MeetingsService {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
       throw new BadRequestException("Meeting filters must use YYYY-MM-DD");
     }
-    const date = new Date(`${value}T00:00:00.000Z`);
-    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      Number.isNaN(date.getTime()) ||
+      date.toISOString().slice(0, 10) !== value
+    ) {
       throw new BadRequestException("Invalid meeting filter date");
     }
+    date.setUTCHours(0, 0, 0, 0);
+    date.setTime(date.getTime() - 330 * 60_000);
     if (exclusiveEnd) date.setUTCDate(date.getUTCDate() + 1);
     return date;
   }

@@ -9,6 +9,10 @@ import { DashboardService } from "./dashboard.service";
 @Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
+  @Get("pending-counts")
+  pendingCounts(@CurrentUser() user: { sub: string; role: string }) {
+    return this.dashboard.pendingCounts(user);
+  }
   @Get("summary") summary(@CurrentUser() user: { sub: string; role: string }) {
     return this.dashboard.summary(user);
   }

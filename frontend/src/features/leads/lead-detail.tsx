@@ -7,6 +7,11 @@ import { apiClient } from "../../lib/api-client";
 import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { notify } from "../../lib/notifications";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
+import {
+  businessDateTimeToIso,
+  formatBusinessDateTime,
+  formatEmbeddedDateTimes,
+} from "../../lib/business-time";
 
 type Activity = {
   id: string;
@@ -54,11 +59,7 @@ const activityTypes = [
   "Proposal",
   "Negotiation",
 ];
-const dateTime = (value: string) =>
-  new Intl.DateTimeFormat("en-IN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
+const dateTime = formatBusinessDateTime;
 const leadDate = (value: string) =>
   new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
@@ -119,7 +120,7 @@ export function LeadDetail() {
           description,
           outcome: outcome || undefined,
           nextAction: nextAction.trim(),
-          followUpAt: new Date(followUpAt).toISOString(),
+          followUpAt: businessDateTimeToIso(followUpAt),
         }),
       });
       setDescription("");
@@ -209,7 +210,7 @@ export function LeadDetail() {
                     </strong>
                     <time>{dateTime(activity.createdAt)}</time>
                   </div>
-                  <p>{activity.description}</p>
+                  <p>{formatEmbeddedDateTimes(activity.description)}</p>
                   {activity.outcome && (
                     <small>Outcome: {activity.outcome}</small>
                   )}

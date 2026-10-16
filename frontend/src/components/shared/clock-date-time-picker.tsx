@@ -41,8 +41,12 @@ function displayValue(value: string) {
   const hourValue = Number(hour);
   const meridiem = hourValue >= 12 ? "PM" : "AM";
   const displayHour = hourValue % 12 || 12;
-  const date = new Date(Number(year), Number(month) - 1, Number(day));
-  return `${date.toLocaleDateString()} · ${displayHour}:${minute} ${meridiem}`;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  const dateLabel = new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  }).format(date);
+  return `${dateLabel} · ${displayHour}:${minute} ${meridiem}`;
 }
 
 function currentDraft(value: string) {

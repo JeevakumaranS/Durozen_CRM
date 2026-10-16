@@ -5,6 +5,14 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { apiClient } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
+import { DateRangePicker } from "../../components/shared/date-range-picker";
+import { LOST_REASONS } from "../leads/lost-reasons";
+import {
+  businessDateTimeInputValue,
+  businessDateTimeToIso,
+  formatBusinessDateTime,
+  formatEmbeddedDateTimes,
+} from "../../lib/business-time";
 
 type MeetingStatus = "SCHEDULED" | "COMPLETED" | "CANCELLED";
 type MeetingActivity = {
@@ -71,11 +79,10 @@ const TYPES = [
   "Requirement Discussion",
   "Business Discussion",
 ];
-const STATUSES: { value: "ALL" | MeetingStatus; label: string }[] = [
-  { value: "ALL", label: "All statuses" },
-  { value: "SCHEDULED", label: "Scheduled" },
-  { value: "COMPLETED", label: "Completed" },
-  { value: "CANCELLED", label: "Cancelled" },
+const MEETING_STATUSES: MeetingStatus[] = [
+  "SCHEDULED",
+  "COMPLETED",
+  "CANCELLED",
 ];
 const emptyForm = (): MeetingForm => ({
   leadId: "",
@@ -89,19 +96,10 @@ const emptyForm = (): MeetingForm => ({
   nextAction: "",
   followUpAt: "",
 });
-const dateTime = (value?: string | null) =>
-  value
-    ? new Intl.DateTimeFormat("en-IN", {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(value))
-    : "—";
-const localDateTime = (value?: string) => {
-  const date = value ? new Date(value) : new Date();
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-};
-const dateValue = (value: string) => new Date(value).toISOString();
+const dateTime = formatBusinessDateTime;
+const localDateTime = (value?: string) =>
+  businessDateTimeInputValue(value ?? new Date());
+const dateValue = businessDateTimeToIso;
 const displayValue = (value?: string | number | null) =>
   value === null || value === undefined || value === "" ? "—" : String(value);
 
@@ -109,9 +107,10 @@ export function MeetingWorkspace() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<(typeof STATUSES)[number]["value"]>("ALL");
+  const [statuses, setStatuses] = useState<MeetingStatus[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [dateFilterEnabled, setDateFilterEnabled] = useState(false);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -124,6 +123,16 @@ export function MeetingWorkspace() {
   const [logDescription, setLogDescription] = useState("");
   const [logOutcome, setLogOutcome] = useState("");
   const [editing, setEditing] = useState<Meeting | null>(null);
+  const [completing, setCompleting] = useState<Meeting | null>(null);
+  const [completionRequirement, setCompletionRequirement] = useState("");
+  const [completionBudget, setCompletionBudget] = useState("");
+  const [completionDiscussionNotes, setCompletionDiscussionNotes] = useState("");
+  const [completionNextAction, setCompletionNextAction] = useState("");
+  const [completionFollowUpAt, setCompletionFollowUpAt] = useState("");
+  const [completionLostReason, setCompletionLostReason] = useState(
+    LOST_REASONS[0],
+  );
+  const [completionOtherLostReason, setCompletionOtherLostReason] = useState("");
   const [rescheduling, setRescheduling] = useState<Meeting | null>(null);
   const [viewing, setViewing] = useState<Meeting | null>(null);
   const [form, setForm] = useState<MeetingForm>(emptyForm);
@@ -136,9 +145,9 @@ export function MeetingWorkspace() {
     try {
       const params = new URLSearchParams();
       if (query.trim()) params.set("search", query.trim());
-      if (status !== "ALL") params.set("status", status);
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
+      if (statuses.length) params.set("status", statuses.join(","));
+      if (dateFilterEnabled && from) params.set("from", from);
+      if (dateFilterEnabled && to) params.set("to", to);
       const [rows, leadRows] = await Promise.all([
         apiClient<Meeting[]>(`/meetings?${params}`),
         apiClient<LeadOption[]>("/leads"),
@@ -157,7 +166,13 @@ export function MeetingWorkspace() {
     } finally {
       setLoading(false);
     }
-  }, [from, query, status, to]);
+  }, [
+    dateFilterEnabled,
+    from,
+    query,
+    statuses,
+    to,
+  ]);
 
   useEffect(() => {
     void load();
@@ -215,7 +230,7 @@ export function MeetingWorkspace() {
       return;
     }
 
-    if (!form.followUpAt) {
+    if (editing && !form.followUpAt) {
       notify("Choose the next follow-up date and time.", "error");
       return;
     }
@@ -232,13 +247,22 @@ export function MeetingWorkspace() {
       type: form.type,
       participants: form.participants || (editing ? null : undefined),
       requirement: form.requirement || (editing ? null : undefined),
-      budget: form.budget ? Number(form.budget) : editing ? null : undefined,
-      discussionNotes: form.discussionNotes || (editing ? null : undefined),
-      customerConcerns: form.customerConcerns || (editing ? null : undefined),
-      ...(!editing || followUpChanged ? { nextAction: form.nextAction } : {}),
-      ...(!editing || followUpChanged
-        ? { followUpAt: dateValue(form.followUpAt) }
-        : {}),
+      ...(editing
+        ? {
+            budget: form.budget ? Number(form.budget) : null,
+            discussionNotes: form.discussionNotes || null,
+            customerConcerns: form.customerConcerns || null,
+            ...(followUpChanged
+              ? {
+                  nextAction: form.nextAction,
+                  followUpAt: dateValue(form.followUpAt),
+                }
+              : {}),
+          }
+        : {
+            nextAction: "Attend scheduled meeting",
+            followUpAt: dateValue(form.meetingAt),
+          }),
     };
     try {
       await apiClient<Meeting>(
@@ -326,11 +350,8 @@ export function MeetingWorkspace() {
     }
   }
 
-  async function updateStatus(meeting: Meeting, action: "complete" | "cancel") {
-    const prompt =
-      action === "complete"
-        ? `Mark the meeting with ${meeting.lead.customerName} as completed?`
-        : `Cancel the scheduled meeting with ${meeting.lead.customerName}? The meeting record will be retained.`;
+  async function updateStatus(meeting: Meeting, action: "cancel") {
+    const prompt = `Cancel the scheduled meeting with ${meeting.lead.customerName}? The meeting record will be retained.`;
     if (!window.confirm(prompt)) return;
     setBusy(true);
     setError("");
@@ -338,16 +359,95 @@ export function MeetingWorkspace() {
       await apiClient<Meeting>(`/meetings/${meeting.id}/${action}`, {
         method: "PATCH",
       });
-      notify(
-        action === "complete" ? "Meeting marked completed." : "Meeting cancelled.",
-      );
+      notify("Meeting cancelled.");
       if (viewing?.id === meeting.id) setViewing(null);
       await load();
     } catch (reason) {
       notify(
         reason instanceof Error
           ? reason.message
-          : `Unable to ${action} meeting.`,
+          : "Unable to cancel meeting.",
+        "error",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startComplete(meeting: Meeting) {
+    setCompleting(meeting);
+    setCompletionRequirement(meeting.requirement ?? "");
+    setCompletionBudget(
+      meeting.budget === null || meeting.budget === undefined
+        ? ""
+        : String(meeting.budget),
+    );
+    setCompletionDiscussionNotes(meeting.discussionNotes ?? "");
+    setCompletionNextAction("");
+    setCompletionFollowUpAt("");
+    setCompletionLostReason(LOST_REASONS[0]);
+    setCompletionOtherLostReason("");
+  }
+
+  async function completeMeeting(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!completing) return;
+    if (!completionRequirement.trim()) {
+      notify("Enter the meeting requirement.", "error");
+      return;
+    }
+    if (completionNextAction === "Proposal" && !completionFollowUpAt) {
+      notify("Choose the next follow-up date and time.", "error");
+      return;
+    }
+    if (!completionNextAction) {
+      notify("Choose Proposal or Lost as the next action.", "error");
+      return;
+    }
+    const lostReason =
+      completionLostReason === "Other"
+        ? completionOtherLostReason.trim()
+        : completionLostReason;
+    if (completionNextAction === "Lost" && !lostReason) {
+      notify("Choose or enter a lost reason.", "error");
+      return;
+    }
+    if (
+      completionNextAction === "Proposal" &&
+      new Date(businessDateTimeToIso(completionFollowUpAt)).getTime() <= Date.now()
+    ) {
+      notify("The next follow-up date and time must be in the future.", "error");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await apiClient<Meeting>(`/meetings/${completing.id}/complete`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          requirement: completionRequirement.trim(),
+          budget: completionBudget ? Number(completionBudget) : null,
+          discussionNotes: completionDiscussionNotes.trim() || undefined,
+          nextAction: completionNextAction,
+          followUpAt:
+            completionNextAction === "Proposal"
+              ? businessDateTimeToIso(completionFollowUpAt)
+              : undefined,
+          lostReason:
+            completionNextAction === "Lost" ? lostReason : undefined,
+        }),
+      });
+      notify(
+        completionNextAction === "Proposal"
+          ? "Meeting completed. Lead remains in Meeting and a Proposal Follow-up task was added."
+          : "Meeting completed and lead moved to Lost.",
+      );
+      setCompleting(null);
+      if (viewing?.id === completing.id) setViewing(null);
+      await load();
+    } catch (reason) {
+      notify(
+        reason instanceof Error ? reason.message : "Unable to complete meeting.",
         "error",
       );
     } finally {
@@ -400,45 +500,75 @@ export function MeetingWorkspace() {
             }}
           />
         </label>
-        <label>
-          Status
-          <select
-            value={status}
-            onChange={(event) => {
-              setPage(1);
-              setStatus(event.target.value as (typeof STATUSES)[number]["value"]);
-            }}
-          >
-            {STATUSES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          From
-          <input
-            type="date"
-            value={from}
-            onChange={(event) => {
-              setPage(1);
-              setFrom(event.target.value);
-            }}
-          />
-        </label>
-        <label>
-          To
-          <input
-            type="date"
-            value={to}
-            onChange={(event) => {
-              setPage(1);
-              setTo(event.target.value);
-            }}
-          />
-        </label>
       </div>
+      <div className="meeting-filter-layout">
+          <aside aria-label="Filter meetings" className="follow-up-filters">
+            <h2>Filter Meetings</h2>
+            <div className="follow-up-filter-options">
+              <div className="follow-up-filter-option">
+                <strong className="follow-up-status-filter-heading">Status</strong>
+                {MEETING_STATUSES.map((item) => (
+                  <label className="follow-up-filter-checkbox" key={item}>
+                    <input
+                      checked={statuses.includes(item)}
+                      onChange={(event) => {
+                        setPage(1);
+                        setStatuses((current) =>
+                          event.target.checked
+                            ? [...current, item]
+                            : current.filter((selected) => selected !== item),
+                        );
+                      }}
+                      type="checkbox"
+                    />
+                    {item.charAt(0) + item.slice(1).toLowerCase()}
+                  </label>
+                ))}
+              </div>
+              <div className="follow-up-filter-option">
+                <label className="follow-up-filter-checkbox">
+                  <input
+                    checked={dateFilterEnabled}
+                    onChange={(event) => {
+                      setPage(1);
+                      setDateFilterEnabled(event.target.checked);
+                      if (!event.target.checked) {
+                        setFrom("");
+                        setTo("");
+                      }
+                    }}
+                    type="checkbox"
+                  />
+                  Date
+                </label>
+                {dateFilterEnabled && (
+                  <DateRangePicker
+                    from={from}
+                    onChange={(start, end) => {
+                      setPage(1);
+                      setFrom(start);
+                      setTo(end);
+                    }}
+                    to={to}
+                  />
+                )}
+              </div>
+            </div>
+            <button
+              className="secondary-action follow-up-clear"
+              onClick={() => {
+                setPage(1);
+                setStatuses([]);
+                setDateFilterEnabled(false);
+                setFrom("");
+                setTo("");
+              }}
+              type="button"
+            >
+              Clear filters
+            </button>
+          </aside>
+        <div className="meeting-filter-results">
       {loading ? (
         <p className="empty-list meeting-empty" role="status">
           Loading meetings...
@@ -531,7 +661,7 @@ export function MeetingWorkspace() {
                       </button>
                       <button
                         disabled={busy}
-                        onClick={() => void updateStatus(meeting, "complete")}
+                        onClick={() => startComplete(meeting)}
                       >
                         Complete
                       </button>
@@ -571,6 +701,8 @@ export function MeetingWorkspace() {
           </nav>
         </>
       )}
+        </div>
+      </div>
 
       {showForm && (
         <div className="modal-backdrop">
@@ -648,18 +780,20 @@ export function MeetingWorkspace() {
                   }
                 />
               </label>
-              <label>
-                Budget (₹)
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={form.budget}
-                  onChange={(event) =>
-                    setForm({ ...form, budget: event.target.value })
-                  }
-                />
-              </label>
+              {editing && (
+                <label>
+                  Budget (₹)
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={form.budget}
+                    onChange={(event) =>
+                      setForm({ ...form, budget: event.target.value })
+                    }
+                  />
+                </label>
+              )}
               <label className="form-wide">
                 Purpose / agenda
                 <textarea
@@ -670,48 +804,52 @@ export function MeetingWorkspace() {
                   }
                 />
               </label>
-              <label className="form-wide">
-                Discussion notes
-                <textarea
-                  rows={2}
-                  value={form.discussionNotes}
-                  onChange={(event) =>
-                    setForm({ ...form, discussionNotes: event.target.value })
-                  }
-                />
-              </label>
-              <label className="form-wide">
-                Customer concerns
-                <textarea
-                  rows={2}
-                  value={form.customerConcerns}
-                  onChange={(event) =>
-                    setForm({ ...form, customerConcerns: event.target.value })
-                  }
-                />
-              </label>
-              <ClockDateTimePicker
-                className="form-wide"
-                label="Next follow-up"
-                required
-                value={form.followUpAt}
-                onChange={(followUpAt) => setForm({ ...form, followUpAt })}
-              />
-              <label>
-                Next action *
-                <input
-                  required
-                  value={form.nextAction}
-                  onChange={(event) =>
-                    setForm({ ...form, nextAction: event.target.value })
-                  }
-                />
-              </label>
+              {editing && (
+                <>
+                  <label className="form-wide">
+                    Discussion notes
+                    <textarea
+                      rows={2}
+                      value={form.discussionNotes}
+                      onChange={(event) =>
+                        setForm({ ...form, discussionNotes: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="form-wide">
+                    Customer concerns
+                    <textarea
+                      rows={2}
+                      value={form.customerConcerns}
+                      onChange={(event) =>
+                        setForm({ ...form, customerConcerns: event.target.value })
+                      }
+                    />
+                  </label>
+                  <ClockDateTimePicker
+                    className="form-wide"
+                    label="Next follow-up"
+                    required
+                    value={form.followUpAt}
+                    onChange={(followUpAt) => setForm({ ...form, followUpAt })}
+                  />
+                  <label>
+                    Next action *
+                    <input
+                      required
+                      value={form.nextAction}
+                      onChange={(event) =>
+                        setForm({ ...form, nextAction: event.target.value })
+                      }
+                    />
+                  </label>
+                </>
+              )}
               <div className="form-footer">
                 <p>
-                  Scheduling may move the lead to Meeting when that transition
-                  is allowed. It does not create a duplicate meeting on stage
-                  changes.
+                  {editing
+                    ? "Update meeting details and follow-up information."
+                    : "The meeting time will be used as the initial follow-up."}
                 </p>
                 <button
                   className="primary"
@@ -809,6 +947,136 @@ export function MeetingWorkspace() {
         </div>
       )}
 
+      {completing && (
+        <div className="modal-backdrop">
+          <section
+            className="lead-modal meeting-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="complete-meeting-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">MEETING OUTCOME</p>
+                <h2 id="complete-meeting-title">
+                  Complete meeting with {completing.lead.customerName}
+                </h2>
+              </div>
+              <button
+                className="modal-close"
+                aria-label="Close"
+                onClick={() => setCompleting(null)}
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+            <form className="lead-form" onSubmit={completeMeeting}>
+              <label className="form-wide">
+                Requirement *
+                <textarea
+                  required
+                  rows={2}
+                  value={completionRequirement}
+                  onChange={(event) =>
+                    setCompletionRequirement(event.target.value)
+                  }
+                />
+              </label>
+              <label>
+                Budget (₹)
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={completionBudget}
+                  onChange={(event) =>
+                    setCompletionBudget(event.target.value)
+                  }
+                />
+              </label>
+              <label className="form-wide">
+                Discussion notes
+                <textarea
+                  rows={3}
+                  value={completionDiscussionNotes}
+                  onChange={(event) =>
+                    setCompletionDiscussionNotes(event.target.value)
+                  }
+                />
+              </label>
+              <label className="form-wide">
+                Next action *
+                <select
+                  required
+                  value={completionNextAction}
+                  onChange={(event) => {
+                    setCompletionNextAction(event.target.value);
+                    setCompletionFollowUpAt("");
+                    setCompletionLostReason(LOST_REASONS[0]);
+                    setCompletionOtherLostReason("");
+                  }}
+                >
+                  <option value="">Choose next action</option>
+                  <option value="Proposal">Proposal</option>
+                  <option value="Lost">Lost</option>
+                </select>
+              </label>
+              {completionNextAction === "Proposal" && (
+                <ClockDateTimePicker
+                  className="form-wide"
+                  label="Next follow-up date"
+                  required
+                  minValue={businessDateTimeInputValue(new Date())}
+                  value={completionFollowUpAt}
+                  onChange={setCompletionFollowUpAt}
+                />
+              )}
+              {completionNextAction === "Lost" && (
+                <>
+                  <label className="form-wide">
+                    Lost reason *
+                    <select
+                      required
+                      value={completionLostReason}
+                      onChange={(event) => {
+                        setCompletionLostReason(event.target.value);
+                        setCompletionOtherLostReason("");
+                      }}
+                    >
+                      {LOST_REASONS.map((reason) => (
+                        <option key={reason}>{reason}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {completionLostReason === "Other" && (
+                    <label className="form-wide">
+                      Other reason *
+                      <input
+                        required
+                        value={completionOtherLostReason}
+                        onChange={(event) =>
+                          setCompletionOtherLostReason(event.target.value)
+                        }
+                      />
+                    </label>
+                  )}
+                </>
+              )}
+              <div className="form-footer">
+                <p>
+                  Choosing Proposal creates a follow-up task in Tasks. Choosing
+                  Lost closes the lead and cancels its pending tasks.
+                </p>
+                <button className="primary" disabled={busy}>
+                  {busy ? "Saving..." : "Complete meeting"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
       {rescheduling && (
         <div className="modal-backdrop">
           <section
@@ -889,7 +1157,7 @@ export function MeetingWorkspace() {
                 <article key={activity.id}>
                   <strong>{activity.type.replaceAll("_", " ")}</strong>
                   <time>{dateTime(activity.createdAt)}</time>
-                  <p>{activity.description}</p>
+                  <p>{formatEmbeddedDateTimes(activity.description)}</p>
                   {activity.user?.fullName && <small>By {activity.user.fullName}</small>}
                 </article>
               ))}

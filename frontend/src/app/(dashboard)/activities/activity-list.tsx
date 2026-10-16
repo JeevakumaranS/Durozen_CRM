@@ -5,6 +5,14 @@ import { FormEvent, Fragment, useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api-client";
 import { notify } from "../../../lib/notifications";
 import { ClockDateTimePicker } from "../../../components/shared/clock-date-time-picker";
+import { DateRangePicker } from "../../../components/shared/date-range-picker";
+import { LOST_REASONS } from "../../../features/leads/lost-reasons";
+import {
+  businessDateTimeInputValue,
+  businessDateTimeToIso,
+  formatBusinessDateTime,
+  formatEmbeddedDateTimes,
+} from "../../../lib/business-time";
 
 type Activity = {
   id: string;
@@ -69,6 +77,10 @@ const TYPES = [
   "MEETING_CANCELLED",
 ];
 const PAGE_SIZE = 15;
+const localDateKey = (date: Date) => {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 10);
+};
 
 export function ActivitiesPage({
   initialType = "",
@@ -82,15 +94,18 @@ export function ActivitiesPage({
   const [callTasks, setCallTasks] = useState<CallTask[]>([]);
   const [contactLeads, setContactLeads] = useState<ContactLead[]>([]);
   const [callTasksLoading, setCallTasksLoading] = useState(callsOnly);
-  const [callTaskStatus, setCallTaskStatus] = useState<"PENDING" | "COMPLETED">(
-    "PENDING",
-  );
+  const [callStatusFilters, setCallStatusFilters] = useState<
+    CallTask["status"][]
+  >([]);
+  const [callDateFilterEnabled, setCallDateFilterEnabled] = useState(false);
+  const [callDateFrom, setCallDateFrom] = useState("");
+  const [callDateTo, setCallDateTo] = useState("");
   const [callTaskRefresh, setCallTaskRefresh] = useState(0);
   const [expandedCallTaskId, setExpandedCallTaskId] = useState<string | null>(
     null,
   );
   const [callDialog, setCallDialog] = useState<
-    "schedule" | "log" | "complete" | null
+    "schedule" | "log" | "complete" | "reschedule" | null
   >(null);
   const [completingCall, setCompletingCall] = useState<CallTask | null>(null);
   const [callLeadId, setCallLeadId] = useState("");
@@ -98,6 +113,19 @@ export function ActivitiesPage({
   const [callDescription, setCallDescription] = useState("");
   const [callOutcome, setCallOutcome] = useState("");
   const [callDueAt, setCallDueAt] = useState("");
+  const [callResponseAction, setCallResponseAction] = useState("");
+  const [callContactDate, setCallContactDate] = useState("");
+  const [callCustomerResponse, setCallCustomerResponse] = useState("");
+  const [callRequirement, setCallRequirement] = useState("");
+  const [callLostReasonType, setCallLostReasonType] = useState<string>(
+    LOST_REASONS[0],
+  );
+  const [callOtherLostReason, setCallOtherLostReason] = useState("");
+  const [callRemarks, setCallRemarks] = useState("");
+  const [scheduleMeeting, setScheduleMeeting] = useState<boolean | null>(null);
+  const [meetingDate, setMeetingDate] = useState("");
+  const [meetingTime, setMeetingTime] = useState("");
+  const [meetingType, setMeetingType] = useState("");
   const [callBusy, setCallBusy] = useState(false);
   const [type, setType] = useState(initialType);
   const [query, setQuery] = useState("");
@@ -110,8 +138,12 @@ export function ActivitiesPage({
     if (!callsOnly) return;
     let current = true;
     setCallTasksLoading(true);
+    const params = new URLSearchParams();
+    if (callStatusFilters.length) params.set("status", callStatusFilters.join(","));
+    if (callDateFilterEnabled && callDateFrom) params.set("from", callDateFrom);
+    if (callDateFilterEnabled && callDateTo) params.set("to", callDateTo);
     Promise.all([
-      apiClient<CallTask[]>(`/calls-messages?status=${callTaskStatus}`),
+      apiClient<CallTask[]>(`/calls-messages?${params}`),
       apiClient<ContactLead[]>("/leads"),
     ])
       .then(([tasks, leads]) => {
@@ -120,7 +152,9 @@ export function ActivitiesPage({
           tasks.filter((task) =>
             ["phone call", "call", "whatsapp", "email"].includes(
               task.contactMethod.trim().toLowerCase(),
-            ),
+            ) &&
+            (!callStatusFilters.length ||
+              callStatusFilters.includes(task.status)),
           ),
         );
         setContactLeads(
@@ -143,7 +177,14 @@ export function ActivitiesPage({
     return () => {
       current = false;
     };
-  }, [callTaskRefresh, callTaskStatus, callsOnly]);
+  }, [
+    callDateFilterEnabled,
+    callDateFrom,
+    callDateTo,
+    callStatusFilters,
+    callTaskRefresh,
+    callsOnly,
+  ]);
 
   useEffect(() => {
     if (callsOnly) {
@@ -198,19 +239,37 @@ export function ActivitiesPage({
       .some((value) => value!.toLowerCase().includes(normalizedQuery)),
   );
 
-  function openCallDialog(mode: "schedule" | "log" | "complete", task?: CallTask) {
+  function openCallDialog(
+    mode: "schedule" | "log" | "complete" | "reschedule",
+    task?: CallTask,
+  ) {
     setCallDialog(mode);
-    setCompletingCall(mode === "complete" ? task ?? null : null);
+    setCompletingCall(
+      mode === "complete" || mode === "reschedule" ? task ?? null : null,
+    );
     setCallLeadId(task?.lead.id ?? "");
     setCallType(task?.contactMethod ?? "Phone Call");
     setCallDescription(mode === "complete" ? task?.description ?? "" : "");
     setCallOutcome(mode === "complete" ? task?.outcome ?? "" : "");
+    setCallResponseAction("");
+    setCallContactDate(mode === "complete" ? localDateKey(new Date()) : "");
+    setCallCustomerResponse("");
+    setCallRequirement("");
+    setCallLostReasonType(LOST_REASONS[0]);
+    setCallOtherLostReason("");
+    setCallRemarks("");
+    setScheduleMeeting(null);
+    setMeetingDate("");
+    setMeetingTime("");
+    setMeetingType("");
     setCallDueAt(
-      mode === "complete"
-        ? ""
-        : mode === "log"
-          ? new Date().toISOString().slice(0, 16)
-          : "",
+      mode === "reschedule" && task
+        ? businessDateTimeInputValue(task.dueAt)
+        : mode === "complete"
+          ? ""
+          : mode === "log"
+            ? new Date().toISOString().slice(0, 16)
+            : "",
     );
   }
 
@@ -218,11 +277,48 @@ export function ActivitiesPage({
     event.preventDefault();
     if (callDialog === "complete") {
       if (!completingCall) return;
-      if (!callDescription.trim() && !callOutcome.trim()) {
-        notify("Enter call notes or an outcome before completing.", "error");
+      if (
+        !callResponseAction ||
+        (callResponseAction === "Not Interested"
+          ? callLostReasonType === "Other"
+            ? !callOtherLostReason.trim()
+            : !callLostReasonType
+          : !callCustomerResponse.trim() || !callRequirement.trim())
+      ) {
+        notify(
+          callResponseAction === "Not Interested"
+            ? "Choose the next action and enter a lost reason."
+            : "Choose the next action and enter the customer response and requirements.",
+          "error",
+        );
         return;
       }
-    } else if (!callLeadId || !callDueAt) {
+      if (callResponseAction === "Interested" && scheduleMeeting === null) {
+        notify("Choose whether to schedule a meeting.", "error");
+        return;
+      }
+      if (
+        scheduleMeeting &&
+        (!meetingDate || !meetingTime || !meetingType)
+      ) {
+        notify("Enter the meeting date, time, and type.", "error");
+        return;
+      }
+      if (
+        scheduleMeeting &&
+        new Date(
+          businessDateTimeToIso(`${meetingDate}T${meetingTime}`),
+        ).getTime() <= Date.now()
+      ) {
+        notify("The meeting date and time must be in the future.", "error");
+        return;
+      }
+    } else if (
+      callDialog === "reschedule"
+        ? !callDueAt ||
+          new Date(businessDateTimeToIso(callDueAt)).getTime() <= Date.now()
+        : !callLeadId || !callDueAt
+    ) {
       notify("Choose a lead and date before saving.", "error");
       return;
     }
@@ -232,11 +328,41 @@ export function ActivitiesPage({
         await apiClient(`/calls-messages/${completingCall.id}/complete`, {
           method: "PATCH",
           body: JSON.stringify({
-            description: callDescription.trim() || undefined,
-            outcome: callOutcome.trim() || undefined,
+            responseAction: callResponseAction,
+            contactDate: callContactDate,
+            customerResponse:
+              callResponseAction === "Not Interested"
+                ? undefined
+                : callCustomerResponse.trim(),
+            requirement:
+              callResponseAction === "Not Interested"
+                ? undefined
+                : callRequirement.trim(),
+            lostReason:
+              callResponseAction === "Not Interested"
+                ? callLostReasonType === "Other"
+                  ? callOtherLostReason.trim()
+                  : callLostReasonType
+                : undefined,
+            remarks: callRemarks.trim() || undefined,
+            scheduleMeeting: callResponseAction === "Interested"
+              ? scheduleMeeting
+              : false,
+            meetingAt: scheduleMeeting
+              ? businessDateTimeToIso(`${meetingDate}T${meetingTime}`)
+              : undefined,
+            meetingType: scheduleMeeting ? meetingType : undefined,
           }),
         });
-        notify("Call completed and added to Logs.");
+        notify("Call completed and lead updated.");
+      } else if (callDialog === "reschedule" && completingCall) {
+        await apiClient(`/calls-messages/${completingCall.id}/reschedule`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            dueAt: businessDateTimeToIso(callDueAt),
+          }),
+        });
+        notify("Phone call rescheduled.");
       } else if (callDialog === "schedule") {
         await apiClient("/calls-messages", {
           method: "POST",
@@ -264,9 +390,6 @@ export function ActivitiesPage({
         notify("Call logged in Calls & Msg.");
       }
       setCallDialog(null);
-      setCallTaskStatus(
-        callDialog === "schedule" ? "PENDING" : "COMPLETED",
-      );
       setCallTaskRefresh((current) => current + 1);
     } catch (reason) {
       notify(
@@ -290,7 +413,24 @@ export function ActivitiesPage({
             </p>
           )}
         </div>
-        {!callsOnly && (
+        {callsOnly ? (
+          <div className="workspace-actions calls-header-actions">
+            <button
+              className="secondary-action"
+              onClick={() => openCallDialog("log")}
+              type="button"
+            >
+              Log call
+            </button>
+            <button
+              className="primary"
+              onClick={() => openCallDialog("schedule")}
+              type="button"
+            >
+              Schedule call
+            </button>
+          </div>
+        ) : (
           <Link className="secondary-action" href="/leads">
             All leads
           </Link>
@@ -309,24 +449,6 @@ export function ActivitiesPage({
             }}
           />
         </label>
-        {callsOnly && (
-          <div className="workspace-actions calls-actions">
-            <button
-              className="secondary-action"
-              onClick={() => openCallDialog("log")}
-              type="button"
-            >
-              Log call
-            </button>
-            <button
-              className="primary"
-              onClick={() => openCallDialog("schedule")}
-              type="button"
-            >
-              Schedule call
-            </button>
-          </div>
-        )}
         {!callsOnly && (
           <label>
             Activity type
@@ -349,39 +471,79 @@ export function ActivitiesPage({
       </div>
       {callsOnly ? (
         <section className="calls-leads-section" aria-label="Leads with call and message next actions">
-          <div className="calls-task-tabs" role="tablist" aria-label="Call tasks">
-            <button
-              aria-selected={callTaskStatus === "PENDING"}
-              className={callTaskStatus === "PENDING" ? "active" : ""}
-              onClick={() => {
-                setExpandedCallTaskId(null);
-                setCallTaskStatus("PENDING");
-              }}
-              role="tab"
-              type="button"
-            >
-              Pending
-            </button>
-            <button
-              aria-selected={callTaskStatus === "COMPLETED"}
-              className={callTaskStatus === "COMPLETED" ? "active" : ""}
-              onClick={() => {
-                setExpandedCallTaskId(null);
-                setCallTaskStatus("COMPLETED");
-              }}
-              role="tab"
-              type="button"
-            >
-              Logs
-            </button>
-          </div>
+          <div className="calls-filter-layout">
+              <aside aria-label="Filter calls and messages" className="follow-up-filters">
+                <h2>Filter Calls &amp; Msg</h2>
+                <div className="follow-up-filter-options">
+                  <div className="follow-up-filter-option">
+                    <strong className="follow-up-status-filter-heading">Status</strong>
+                    {(["PENDING", "COMPLETED"] as const).map(
+                      (status) => (
+                        <label className="follow-up-filter-checkbox" key={status}>
+                          <input
+                            checked={callStatusFilters.includes(status)}
+                            onChange={(event) => {
+                              setExpandedCallTaskId(null);
+                              setCallStatusFilters((current) =>
+                                event.target.checked
+                                  ? [...current, status]
+                                  : current.filter((item) => item !== status),
+                              );
+                            }}
+                            type="checkbox"
+                          />
+                          {status.charAt(0) + status.slice(1).toLowerCase()}
+                        </label>
+                      ),
+                    )}
+                  </div>
+                  <div className="follow-up-filter-option">
+                    <label className="follow-up-filter-checkbox">
+                      <input
+                        checked={callDateFilterEnabled}
+                        onChange={(event) => {
+                          setCallDateFilterEnabled(event.target.checked);
+                          if (!event.target.checked) {
+                            setCallDateFrom("");
+                            setCallDateTo("");
+                          }
+                        }}
+                        type="checkbox"
+                      />
+                      Date
+                    </label>
+                    {callDateFilterEnabled && (
+                      <DateRangePicker
+                        from={callDateFrom}
+                        onChange={(from, to) => {
+                          setCallDateFrom(from);
+                          setCallDateTo(to);
+                        }}
+                        to={callDateTo}
+                      />
+                    )}
+                  </div>
+                </div>
+                <button
+                  className="secondary-action follow-up-clear"
+                  onClick={() => {
+                    setCallStatusFilters([]);
+                    setCallDateFilterEnabled(false);
+                    setCallDateFrom("");
+                    setCallDateTo("");
+                    setExpandedCallTaskId(null);
+                  }}
+                  type="button"
+                >
+                  Clear filters
+                </button>
+              </aside>
+            <div className="calls-filter-results">
           {callTasksLoading ? (
             <div className="empty-list" role="status">Loading call tasks...</div>
           ) : visibleCallTasks.length === 0 ? (
             <div className="empty-list">
-              {callTaskStatus === "PENDING"
-                ? "No pending Phone Call, WhatsApp, or Email tasks."
-                : "No completed call or message tasks yet."}
+              No call or message tasks match these filters.
             </div>
           ) : (
             <div className="lead-table-wrap calls-lead-table-wrap">
@@ -393,7 +555,7 @@ export function ActivitiesPage({
                     <th>Next action</th>
                     <th>Stage</th>
                     <th>Assigned BDE</th>
-                    <th>{callTaskStatus === "PENDING" ? "Scheduled" : "Completed"}</th>
+                    <th>Date</th>
                     <th>Action</th>
                   </tr>
                 </thead>
@@ -427,27 +589,31 @@ export function ActivitiesPage({
                         </td>
                         <td>{task.lead.assignedBde.fullName}</td>
                         <td>
-                          {callTaskStatus === "PENDING"
-                            ? new Intl.DateTimeFormat("en-IN", {
-                                dateStyle: "medium",
-                                timeStyle: "short",
-                              }).format(new Date(task.dueAt))
-                            : task.completedAt
-                              ? new Intl.DateTimeFormat("en-IN", {
-                                  dateStyle: "medium",
-                                  timeStyle: "short",
-                                }).format(new Date(task.completedAt))
-                              : "Completed"}
+                          {formatBusinessDateTime(task.dueAt)}
                         </td>
                         <td>
                           {task.status === "PENDING" ? (
-                            <button
-                              className="lead-edit"
-                              onClick={() => openCallDialog("complete", task)}
-                              type="button"
-                            >
-                              Complete
-                            </button>
+                            <>
+                              {task.contactMethod.trim().toLowerCase() ===
+                                "phone call" && (
+                                <button
+                                  className="lead-edit"
+                                  onClick={() =>
+                                    openCallDialog("reschedule", task)
+                                  }
+                                  type="button"
+                                >
+                                  Reschedule
+                                </button>
+                              )}
+                              <button
+                                className="lead-edit"
+                                onClick={() => openCallDialog("complete", task)}
+                                type="button"
+                              >
+                                Complete
+                              </button>
+                            </>
                           ) : (
                             <span className="calls-completed-label">Logged</span>
                           )}
@@ -459,7 +625,7 @@ export function ActivitiesPage({
                             <div className="calls-lead-details">
                               <dl>
                                 <div><dt>Contact method</dt><dd>{task.contactMethod}</dd></div>
-                                <div><dt>Due date</dt><dd>{new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(task.dueAt))}</dd></div>
+                                <div><dt>Due date</dt><dd>{formatBusinessDateTime(task.dueAt)}</dd></div>
                                 <div><dt>Phone</dt><dd>{task.lead.mobileNumber}</dd></div>
                                 <div><dt>Company</dt><dd>{task.lead.businessName || "—"}</dd></div>
                                 <div><dt>Stage</dt><dd>{task.lead.stage.replaceAll("_", " ")}</dd></div>
@@ -478,6 +644,8 @@ export function ActivitiesPage({
               </table>
             </div>
           )}
+            </div>
+          </div>
         </section>
       ) : (
       <section className="global-activity-list">
@@ -504,7 +672,7 @@ export function ActivitiesPage({
                   }).format(new Date(activity.createdAt))}
                 </time>
               </div>
-              <p>{activity.description}</p>
+              <p>{formatEmbeddedDateTimes(activity.description)}</p>
               {activity.outcome && <small>Outcome: {activity.outcome}</small>}
               {activity.nextAction && (
                 <small>Next action: {activity.nextAction}</small>
@@ -541,7 +709,9 @@ export function ActivitiesPage({
                     ? "Schedule call"
                     : callDialog === "complete"
                       ? "Complete call"
-                      : "Log call"}
+                      : callDialog === "reschedule"
+                        ? "Reschedule phone call"
+                        : "Log call"}
                 </h2>
               </div>
               <button
@@ -554,63 +724,248 @@ export function ActivitiesPage({
               </button>
             </div>
             <form className="lead-form" onSubmit={saveCall}>
-              <label className="form-wide">
-                Lead *
-                <select
-                  required
-                  disabled={callDialog === "complete"}
-                  value={callLeadId}
-                  onChange={(event) => setCallLeadId(event.target.value)}
-                >
-                  <option value="">Select a lead</option>
-                  {contactLeads.map((lead) => (
-                    <option key={lead.id} value={lead.id}>
-                      {lead.customerName} · {lead.mobileNumber}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Contact method *
-                <select
-                  required
-                  disabled={callDialog === "complete"}
-                  value={callType}
-                  onChange={(event) => {
-                    setCallType(event.target.value);
-                  }}
-                >
-                  <option>Phone Call</option>
-                  <option>WhatsApp</option>
-                  <option>Email</option>
-                </select>
-              </label>
-              {callDialog !== "complete" && (
-                <ClockDateTimePicker
-                  label="Call date and time *"
-                  required
-                  value={callDueAt}
-                  onChange={setCallDueAt}
-                />
-              )}
-              <label className="form-wide">
-                {callDialog === "schedule" ? "Notes" : "Call notes"}
-                <textarea
-                  required={callDialog !== "schedule"}
-                  rows={3}
-                  value={callDescription}
-                  onChange={(event) => setCallDescription(event.target.value)}
-                />
-              </label>
-              {callDialog !== "schedule" && (
-                <label className="form-wide">
-                  Outcome
-                  <textarea
-                    rows={2}
-                    value={callOutcome}
-                    onChange={(event) => setCallOutcome(event.target.value)}
+              {callDialog === "reschedule" ? (
+                <>
+                  <label className="form-wide">
+                    Lead
+                    <input readOnly value={completingCall?.lead.customerName ?? ""} />
+                  </label>
+                  <ClockDateTimePicker
+                    className="form-wide"
+                    label="New call date and time *"
+                    minValue={`${localDateKey(new Date())}T00:00`}
+                    required
+                    value={callDueAt}
+                    onChange={setCallDueAt}
                   />
-                </label>
+                </>
+              ) : callDialog === "complete" ? (
+                <>
+                  <label className="form-wide">
+                    Lead name *
+                    <input
+                      readOnly
+                      required
+                      value={completingCall?.lead.customerName ?? ""}
+                    />
+                  </label>
+                  <label>
+                    Contact type *
+                    <input
+                      readOnly
+                      required
+                      value={completingCall?.contactMethod ?? ""}
+                    />
+                  </label>
+                  <label>
+                    Contact date *
+                    <input readOnly required type="date" value={callContactDate} />
+                  </label>
+                  <label className="form-wide">
+                    Next action *
+                    <select
+                      required
+                      value={callResponseAction}
+                      onChange={(event) => {
+                        setCallResponseAction(event.target.value);
+                        setScheduleMeeting(null);
+                        setMeetingDate("");
+                        setMeetingTime("");
+                        setMeetingType("");
+                      }}
+                    >
+                      <option value="">Select the customer response</option>
+                      <option value="Interested">Interested</option>
+                      <option value="Not Interested">Not interested</option>
+                      <option value="Decision pending">Decision pending</option>
+                    </select>
+                  </label>
+                  {callResponseAction && (
+                    <>
+                      {callResponseAction === "Not Interested" ? (
+                        <>
+                          <label className="form-wide">
+                            Lost reason *
+                            <select
+                              required
+                              value={callLostReasonType}
+                              onChange={(event) => {
+                                setCallLostReasonType(event.target.value);
+                                setCallOtherLostReason("");
+                              }}
+                            >
+                              {LOST_REASONS.map((reason) => (
+                                <option key={reason}>{reason}</option>
+                              ))}
+                            </select>
+                          </label>
+                          {callLostReasonType === "Other" && (
+                            <label className="form-wide">
+                              Other reason *
+                              <input
+                                required
+                                value={callOtherLostReason}
+                                onChange={(event) =>
+                                  setCallOtherLostReason(event.target.value)
+                                }
+                              />
+                            </label>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <label className="form-wide">
+                            Customer response *
+                            <textarea
+                              required
+                              rows={3}
+                              value={callCustomerResponse}
+                              onChange={(event) =>
+                                setCallCustomerResponse(event.target.value)
+                              }
+                            />
+                          </label>
+                          <label className="form-wide">
+                            Requirements *
+                            <textarea
+                              required
+                              rows={3}
+                              value={callRequirement}
+                              onChange={(event) =>
+                                setCallRequirement(event.target.value)
+                              }
+                            />
+                          </label>
+                        </>
+                      )}
+                      <label className="form-wide">
+                        Remarks
+                        <textarea
+                          rows={2}
+                          value={callRemarks}
+                          onChange={(event) => setCallRemarks(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
+                  {callResponseAction === "Interested" && (
+                    <label className="form-wide">
+                      Schedule a meeting? *
+                      <select
+                        required
+                        value={
+                          scheduleMeeting === null
+                            ? ""
+                            : scheduleMeeting
+                              ? "yes"
+                              : "no"
+                        }
+                        onChange={(event) => {
+                          setScheduleMeeting(event.target.value === "yes");
+                          setMeetingDate("");
+                          setMeetingTime("");
+                          setMeetingType("");
+                        }}
+                      >
+                        <option value="">Choose an option</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                      </select>
+                    </label>
+                  )}
+                  {scheduleMeeting && callResponseAction === "Interested" && (
+                    <>
+                      <ClockDateTimePicker
+                        className="form-wide"
+                        label="Meeting date and time"
+                        required
+                        minValue={`${localDateKey(new Date())}T00:00`}
+                        value={
+                          meetingDate && meetingTime
+                            ? `${meetingDate}T${meetingTime}`
+                            : ""
+                        }
+                        onChange={(value) => {
+                          const [date, time] = value.split("T");
+                          setMeetingDate(date);
+                          setMeetingTime(time);
+                        }}
+                      />
+                      <label className="form-wide">
+                        Meeting type *
+                        <select
+                          required
+                          value={meetingType}
+                          onChange={(event) =>
+                            setMeetingType(event.target.value)
+                          }
+                        >
+                          <option value="">Choose a meeting type</option>
+                          <option>Online Meeting</option>
+                          <option>Offline Meeting</option>
+                          <option>Product Demo</option>
+                          <option>Requirement Discussion</option>
+                          <option>Business Discussion</option>
+                        </select>
+                      </label>
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <label className="form-wide">
+                    Lead *
+                    <select
+                      required
+                      value={callLeadId}
+                      onChange={(event) => setCallLeadId(event.target.value)}
+                    >
+                      <option value="">Select a lead</option>
+                      {contactLeads.map((lead) => (
+                        <option key={lead.id} value={lead.id}>
+                          {lead.customerName} · {lead.mobileNumber}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Contact method *
+                    <select
+                      required
+                      value={callType}
+                      onChange={(event) => setCallType(event.target.value)}
+                    >
+                      <option>Phone Call</option>
+                      <option>WhatsApp</option>
+                      <option>Email</option>
+                    </select>
+                  </label>
+                  <ClockDateTimePicker
+                    label="Call date and time *"
+                    required
+                    value={callDueAt}
+                    onChange={setCallDueAt}
+                  />
+                  <label className="form-wide">
+                    {callDialog === "schedule" ? "Notes" : "Call notes"}
+                    <textarea
+                      required={callDialog !== "schedule"}
+                      rows={3}
+                      value={callDescription}
+                      onChange={(event) => setCallDescription(event.target.value)}
+                    />
+                  </label>
+                  {callDialog !== "schedule" && (
+                    <label className="form-wide">
+                      Outcome
+                      <textarea
+                        rows={2}
+                        value={callOutcome}
+                        onChange={(event) => setCallOutcome(event.target.value)}
+                      />
+                    </label>
+                  )}
+                </>
               )}
               <div className="form-footer">
                 <p>
@@ -618,6 +973,8 @@ export function ActivitiesPage({
                     ? "Scheduled calls appear in Tasks until completed."
                     : callDialog === "complete"
                       ? "Completed calls are retained in Logs."
+                      : callDialog === "reschedule"
+                        ? "The call remains pending at the new date and time."
                       : "This call is saved directly to Logs."}
                 </p>
                 <button className="primary" disabled={callBusy}>
@@ -627,6 +984,8 @@ export function ActivitiesPage({
                       ? "Complete call"
                       : callDialog === "schedule"
                         ? "Schedule call"
+                        : callDialog === "reschedule"
+                          ? "Reschedule call"
                         : "Log call"}
                 </button>
               </div>

@@ -8,6 +8,11 @@ import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { getAuthUser } from "../../lib/auth";
 import { notify } from "../../lib/notifications";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
+import { LOST_REASONS } from "./lost-reasons";
+import {
+  businessDateTimeInputValue,
+  businessDateTimeToIso,
+} from "../../lib/business-time";
 
 const STAGES = [
   "NEW_LEAD",
@@ -47,18 +52,6 @@ const MEETING_TYPES = [
   "Requirement Discussion",
   "Business Discussion",
 ] as const;
-const LOST_REASONS = [
-  "Price Too High",
-  "Customer Selected Competitor",
-  "Budget Not Available",
-  "Requirement Cancelled",
-  "No Response",
-  "Not Interested",
-  "Project Postponed",
-  "Requirement Changed",
-  "Duplicate Lead",
-  "Other",
-];
 const PAYMENT_STATUSES = [
   "Advance Pending",
   "Partially Paid",
@@ -141,15 +134,11 @@ function followUpDateInputValue(value?: string | null) {
 }
 
 function followUpDateToIso(value: string) {
-  return new Date(`${value}T09:00:00`).toISOString();
+  return businessDateTimeToIso(`${value}T09:00`);
 }
 
 function localDateTimeInputValue(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return localDate.toISOString().slice(0, 16);
+  return businessDateTimeInputValue(value);
 }
 
 function createEmptyLeadForm(): LeadForm {
@@ -767,12 +756,12 @@ export function LeadWorkspace({
           method: "POST",
           body: JSON.stringify({
             leadId: lead.id,
-            meetingAt: new Date(transitionMeetingAt).toISOString(),
+            meetingAt: businessDateTimeToIso(transitionMeetingAt),
             type: transitionMeetingType,
             discussionNotes: transitionDiscussionNotes.trim() || undefined,
             customerConcerns: transitionCustomerConcerns.trim() || undefined,
             nextAction: transitionNextAction.trim(),
-            followUpAt: new Date(transitionFollowUpAt).toISOString(),
+            followUpAt: businessDateTimeToIso(transitionFollowUpAt),
           }),
         });
       } else if (requiresProposal) {
@@ -791,7 +780,7 @@ export function LeadWorkspace({
                 ? Number(transitionProposalDiscount)
                 : 0,
               customerResponse: transitionProposalResponse.trim() || undefined,
-              followUpAt: new Date(transitionFollowUpAt).toISOString(),
+              followUpAt: businessDateTimeToIso(transitionFollowUpAt),
               nextAction: lead.nextAction?.trim() || "Follow up on proposal",
             }),
           },
@@ -806,7 +795,7 @@ export function LeadWorkspace({
             negotiatedAmount: Number(transitionNegotiatedAmount),
             customerConcern: transitionNegotiationConcern.trim() || undefined,
             nextAction: transitionNextAction.trim(),
-            followUpAt: new Date(transitionFollowUpAt).toISOString(),
+            followUpAt: businessDateTimeToIso(transitionFollowUpAt),
           }),
         });
         createdNegotiation = true;
@@ -819,7 +808,7 @@ export function LeadWorkspace({
               ? transitionNextAction.trim()
               : lead.nextAction,
             followUpAt: requiresFollowUpPlan
-              ? new Date(transitionFollowUpAt).toISOString()
+              ? businessDateTimeToIso(transitionFollowUpAt)
               : lead.followUpAt,
             finalDealValue:
               targetStage === "WON" ? Number(finalDealValue) : undefined,

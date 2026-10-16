@@ -6,6 +6,12 @@ import { apiClient } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { notifyLeadUpdated } from "../../lib/lead-events";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
+import {
+  BUSINESS_TIME_ZONE,
+  businessDateTimeInputValue,
+  businessDateTimeToIso,
+  formatBusinessDateTime,
+} from "../../lib/business-time";
 
 type LeadOption = {
   id: string;
@@ -44,15 +50,8 @@ type FollowUp = {
     activities?: { contactType: string | null }[];
   };
 };
-type FollowUpSummary = {
-  dueToday: number;
-  upcoming: number;
-  overdue: number;
-  completed: number;
-};
-type Scope = "today" | "upcoming" | "overdue" | "completed";
 type FollowUpStatus = FollowUp["status"];
-type NextLeadStage = "CONTACTED" | "INTERESTED" | "LOST";
+type NextLeadStage = "CONTACTED" | "INTERESTED" | "PROPOSAL" | "LOST";
 type CompletionErrors = Partial<
   Record<
     | "nextAction"
@@ -68,8 +67,11 @@ type CompletionErrors = Partial<
 type FollowUpFilterKey =
   | "type"
   | "assignee"
-  | "status"
   | "date";
+const FOLLOW_UP_STATUSES: FollowUpStatus[] = [
+  "PENDING",
+  "COMPLETED",
+];
 const RESCHEDULE_REASONS = [
   "Customer requested",
   "Customer unavailable",
@@ -84,53 +86,9 @@ const TYPES = [
   "Proposal Follow-up",
   "Negotiation",
 ];
-const BUSINESS_TIME_ZONE = "Asia/Kolkata";
-const businessDateTimeParts = (date: Date) =>
-  Object.fromEntries(
-    new Intl.DateTimeFormat("en", {
-      timeZone: BUSINESS_TIME_ZONE,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(date)
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, Number(part.value)]),
-  );
-const businessInputValue = (date: Date) => {
-  const parts = businessDateTimeParts(date);
-  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}T${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
-};
-const businessDateTimeIso = (value: string) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
-  if (!match) throw new Error("Enter a valid follow-up date and time.");
-  const [, year, month, day, hour, minute] = match.map(Number);
-  const utcGuess = Date.UTC(year, month - 1, day, hour, minute);
-  const zonedParts = businessDateTimeParts(new Date(utcGuess));
-  const representedUtc = Date.UTC(
-    zonedParts.year,
-    zonedParts.month - 1,
-    zonedParts.day,
-    zonedParts.hour,
-    zonedParts.minute,
-  );
-  return new Date(utcGuess - (representedUtc - utcGuess)).toISOString();
-};
-const formatDate = (value: string) =>
-  new Intl.DateTimeFormat("en-IN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: BUSINESS_TIME_ZONE,
-  }).format(new Date(value));
-const formatBusinessDateTime = (value: string) =>
-  new Intl.DateTimeFormat("en-IN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: BUSINESS_TIME_ZONE,
-  }).format(new Date(businessDateTimeIso(value)));
+const businessInputValue = businessDateTimeInputValue;
+const businessDateTimeIso = businessDateTimeToIso;
+const formatDate = formatBusinessDateTime;
 const businessDateKey = (value: Date) => {
   const values = Object.fromEntries(
     new Intl.DateTimeFormat("en", {
@@ -147,17 +105,10 @@ const businessDateKey = (value: Date) => {
 };
 
 export function FollowUpWorkspace() {
-  const [scope, setScope] = useState<Scope>("today");
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<FollowUp[]>([]);
   const [leads, setLeads] = useState<LeadOption[]>([]);
   const [assignees, setAssignees] = useState<Assignee[]>([]);
-  const [summary, setSummary] = useState<FollowUpSummary>({
-    dueToday: 0,
-    upcoming: 0,
-    overdue: 0,
-    completed: 0,
-  });
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [enabledFilters, setEnabledFilters] = useState<
@@ -165,16 +116,14 @@ export function FollowUpWorkspace() {
   >({
     type: false,
     assignee: false,
-    status: false,
     date: false,
   });
-  const [typeFilter, setTypeFilter] = useState("");
-  const [assignedBdeId, setAssignedBdeId] = useState("");
-  const [statusFilter, setStatusFilter] = useState<FollowUpStatus | "">("");
+  const [typeFilters, setTypeFilters] = useState<string[]>([]);
+  const [assignedBdeIds, setAssignedBdeIds] = useState<string[]>([]);
+  const [statusFilters, setStatusFilters] = useState<FollowUpStatus[]>([]);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [loading, setLoading] = useState(true);
-  const [summaryLoading, setSummaryLoading] = useState(true);
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -213,9 +162,8 @@ export function FollowUpWorkspace() {
     if (enabled) return;
 
     resetPage();
-    if (key === "type") setTypeFilter("");
-    if (key === "assignee") setAssignedBdeId("");
-    if (key === "status") setStatusFilter("");
+    if (key === "type") setTypeFilters([]);
+    if (key === "assignee") setAssignedBdeIds([]);
     if (key === "date") {
       setFrom("");
       setTo("");
@@ -226,13 +174,13 @@ export function FollowUpWorkspace() {
     const requestId = ++listRequestId.current;
     setLoading(true);
     setError("");
-    const params = new URLSearchParams({ scope });
+    const params = new URLSearchParams();
     if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
-    if (enabledFilters.type && typeFilter) params.set("type", typeFilter);
-    if (enabledFilters.assignee && assignedBdeId)
-      params.set("assignedBdeId", assignedBdeId);
-    if (enabledFilters.status && statusFilter)
-      params.set("status", statusFilter);
+    if (enabledFilters.type && typeFilters.length)
+      params.set("type", typeFilters.join(","));
+    if (enabledFilters.assignee && assignedBdeIds.length)
+      params.set("assignedBdeId", assignedBdeIds.join(","));
+    if (statusFilters.length) params.set("status", statusFilters.join(","));
     if (enabledFilters.date && from) params.set("from", from);
     if (enabledFilters.date && to) params.set("to", to);
     try {
@@ -252,14 +200,13 @@ export function FollowUpWorkspace() {
       if (requestId === listRequestId.current) setLoading(false);
     }
   }, [
-    assignedBdeId,
+    assignedBdeIds,
     debouncedSearch,
     enabledFilters,
     from,
-    scope,
-    statusFilter,
+    statusFilters,
     to,
-    typeFilter,
+    typeFilters,
   ]);
 
   useEffect(() => {
@@ -273,12 +220,10 @@ export function FollowUpWorkspace() {
 
   useEffect(() => {
     Promise.all([
-      apiClient<FollowUpSummary>("/follow-ups/summary"),
       apiClient<LeadOption[]>("/leads"),
       apiClient<Assignee[]>("/leads/assignees"),
     ])
-      .then(([counts, leadRows, authorizedAssignees]) => {
-        setSummary(counts);
+      .then(([leadRows, authorizedAssignees]) => {
         setLeads(
           leadRows.filter((lead) => !["WON", "LOST"].includes(lead.stage)),
         );
@@ -288,11 +233,10 @@ export function FollowUpWorkspace() {
         notify(
           reason instanceof Error
             ? reason.message
-            : "Unable to load task summary and options.",
+            : "Unable to load task options.",
           "error",
         );
-      })
-      .finally(() => setSummaryLoading(false));
+      });
   }, []);
 
   const pageSize = 10;
@@ -331,7 +275,7 @@ export function FollowUpWorkspace() {
       setRemarks("");
       notify("Task scheduled.");
       setPage(1);
-      await Promise.all([load(), refreshSummary()]);
+      await load();
     } catch (reason) {
       notify(
         reason instanceof Error
@@ -491,12 +435,14 @@ export function FollowUpWorkspace() {
             ? "Lead moved to Lost."
             : scheduleMeeting
               ? "Lead moved to Interested and meeting scheduled."
+              : selectedNextStage === "PROPOSAL"
+                ? "Lead moved to Proposal."
               : selectedNextStage === "INTERESTED"
                 ? "Lead moved to Interested."
                 : "Lead moved to Contacted."
           : "Task rescheduled with one successor action.",
       );
-      await Promise.all([load(), refreshSummary()]);
+      await load();
     } catch (reason) {
       notify(
         reason instanceof Error ? reason.message : "Unable to update task.",
@@ -504,20 +450,6 @@ export function FollowUpWorkspace() {
       );
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function refreshSummary() {
-    try {
-      const counts = await apiClient<FollowUpSummary>("/follow-ups/summary");
-      setSummary(counts);
-    } catch (reason) {
-      notify(
-        reason instanceof Error
-          ? reason.message
-          : "Unable to refresh task summary.",
-        "error",
-      );
     }
   }
 
@@ -576,30 +508,6 @@ export function FollowUpWorkspace() {
           </button>
         </div>
       </header>
-      <section className="follow-up-summary" aria-label="Task summary">
-        {(
-          [
-            ["today", "Due Today", summary.dueToday],
-            ["upcoming", "Upcoming", summary.upcoming],
-            ["overdue", "Overdue", summary.overdue],
-            ["completed", "Completed", summary.completed],
-          ] as const
-        ).map(([value, label, count]) => (
-          <button
-            className={`follow-up-summary-card follow-up-summary-${value}${scope === value ? " active" : ""}`}
-            type="button"
-            key={value}
-            onClick={() => {
-              setPage(1);
-              setStatusFilter("");
-              setScope(value);
-            }}
-          >
-            <span>{label}</span>
-            <strong>{summaryLoading ? "—" : count}</strong>
-          </button>
-        ))}
-      </section>
       <label className="search-field follow-up-search">
         <span aria-hidden="true">⌕</span>
         <input
@@ -630,21 +538,25 @@ export function FollowUpWorkspace() {
               {enabledFilters.type && (
                 <label className="follow-up-filter-input">
                   Select type *
-                  <select
-                    required
-                    value={typeFilter}
-                    onChange={(event) => {
-                      resetPage();
-                      setTypeFilter(event.target.value);
-                    }}
-                  >
-                    <option value="">Choose a type</option>
+                  <div className="follow-up-filter-checkboxes">
                     {TYPES.map((item) => (
-                      <option key={item} value={item}>
+                      <label className="follow-up-filter-checkbox" key={item}>
+                        <input
+                          checked={typeFilters.includes(item)}
+                          onChange={(event) => {
+                            resetPage();
+                            setTypeFilters((current) =>
+                              event.target.checked
+                                ? [...current, item]
+                                : current.filter((selected) => selected !== item),
+                            );
+                          }}
+                          type="checkbox"
+                        />
                         {item}
-                      </option>
+                      </label>
                     ))}
-                  </select>
+                  </div>
                 </label>
               )}
             </div>
@@ -662,54 +574,49 @@ export function FollowUpWorkspace() {
               {enabledFilters.assignee && (
                 <label className="follow-up-filter-input">
                   Select BDE *
-                  <select
-                    required
-                    value={assignedBdeId}
-                    onChange={(event) => {
-                      resetPage();
-                      setAssignedBdeId(event.target.value);
-                    }}
-                  >
-                    <option value="">Choose a BDE</option>
+                  <div className="follow-up-filter-checkboxes">
                     {assignees.map((assignee) => (
-                      <option key={assignee.id} value={assignee.id}>
+                      <label
+                        className="follow-up-filter-checkbox"
+                        key={assignee.id}
+                      >
+                        <input
+                          checked={assignedBdeIds.includes(assignee.id)}
+                          onChange={(event) => {
+                            resetPage();
+                            setAssignedBdeIds((current) =>
+                              event.target.checked
+                                ? [...current, assignee.id]
+                                : current.filter((id) => id !== assignee.id),
+                            );
+                          }}
+                          type="checkbox"
+                        />
                         {assignee.fullName}
-                      </option>
+                      </label>
                     ))}
-                  </select>
+                  </div>
                 </label>
               )}
             </div>
             <div className="follow-up-filter-option">
-              <label className="follow-up-filter-checkbox">
-                <input
-                  type="checkbox"
-                  checked={enabledFilters.status}
-                  onChange={(event) =>
-                    toggleFilter("status", event.target.checked)
-                  }
-                />
-                Status
-              </label>
-              {enabledFilters.status && (
-                <label className="follow-up-filter-input">
-                  Select status *
-                  <select
-                    required
-                    value={statusFilter}
+              {FOLLOW_UP_STATUSES.map((item) => (
+                <label className="follow-up-filter-checkbox" key={item}>
+                  <input
+                    checked={statusFilters.includes(item)}
                     onChange={(event) => {
                       resetPage();
-                      setStatusFilter(event.target.value as FollowUpStatus | "");
+                      setStatusFilters((current) =>
+                        event.target.checked
+                          ? [...current, item]
+                          : current.filter((status) => status !== item),
+                      );
                     }}
-                  >
-                    <option value="">Choose a status</option>
-                    <option value="PENDING">Pending</option>
-                    <option value="COMPLETED">Completed</option>
-                    <option value="RESCHEDULED">Rescheduled</option>
-                    <option value="CANCELLED">Cancelled</option>
-                  </select>
+                    type="checkbox"
+                  />
+                  {item.charAt(0) + item.slice(1).toLowerCase()}
                 </label>
-              )}
+              ))}
             </div>
             <div className="follow-up-filter-option">
               <label className="follow-up-filter-checkbox">
@@ -761,12 +668,11 @@ export function FollowUpWorkspace() {
             setEnabledFilters({
               type: false,
               assignee: false,
-              status: false,
               date: false,
             });
-            setTypeFilter("");
-            setAssignedBdeId("");
-            setStatusFilter("");
+            setTypeFilters([]);
+            setAssignedBdeIds([]);
+            setStatusFilters([]);
             setFrom("");
             setTo("");
           }}
@@ -845,14 +751,6 @@ export function FollowUpWorkspace() {
                     >
                       Complete
                     </button>
-                    {!["WON", "LOST"].includes(item.lead.stage) && (
-                      <button
-                        disabled={busy}
-                        onClick={() => beginUpdate(item, "RESCHEDULED")}
-                      >
-                        Reschedule
-                      </button>
-                    )}
                   </div>
                 )}
               </article>
@@ -1020,8 +918,15 @@ export function FollowUpWorkspace() {
                 >
                   <option value="">Choose next action</option>
                   <option value="INTERESTED">Interested</option>
+                  {completingItem.type === "Proposal Follow-up" &&
+                    completingItem.lead.stage === "MEETING" && (
+                      <option value="PROPOSAL">Proposal</option>
+                    )}
                   <option value="LOST">Not Interested</option>
-                  <option value="CONTACTED">Decision Pending</option>
+                  {!(completingItem.type === "Proposal Follow-up" &&
+                    completingItem.lead.stage === "MEETING") && (
+                    <option value="CONTACTED">Decision Pending</option>
+                  )}
                 </select>
                 {completionErrors.nextAction && (
                   <small className="field-error">

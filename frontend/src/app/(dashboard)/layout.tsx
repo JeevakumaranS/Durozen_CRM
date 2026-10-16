@@ -7,6 +7,23 @@ import { apiClient, logoutAndRedirect } from "../../lib/api-client";
 import { AuthUser, getAccessToken, setAuthUser } from "../../lib/auth";
 import { notify } from "../../lib/notifications";
 
+type PendingCounts = {
+  tasks: number;
+  meetings: number;
+  callsAndMessages: number;
+};
+
+function pendingCountFor(
+  label: string,
+  counts: PendingCounts | null,
+): number | undefined {
+  if (!counts) return undefined;
+  if (label === "Tasks") return counts.tasks;
+  if (label === "Meetings") return counts.meetings;
+  if (label === "Calls & Msg") return counts.callsAndMessages;
+  return undefined;
+}
+
 const adminNavigation = [
   ["Dashboard", "/dashboard"],
   ["Leads", "/leads"],
@@ -73,10 +90,38 @@ export default function DashboardLayout({
     useState(isActivitySection);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [pendingCounts, setPendingCounts] = useState<PendingCounts | null>(null);
 
   useEffect(() => {
     if (isActivitySection) setActivitiesExpanded(true);
   }, [isActivitySection]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    const loadPendingCounts = () => {
+      apiClient<PendingCounts>("/dashboard/pending-counts")
+        .then((counts) => {
+          if (active) setPendingCounts(counts);
+        })
+        .catch((reason: unknown) => {
+          if (!active) return;
+          const message =
+            reason instanceof Error
+              ? reason.message
+              : "Unable to load pending activity counts.";
+          notify(message, "error");
+        });
+    };
+    loadPendingCounts();
+    const interval = window.setInterval(loadPendingCounts, 60_000);
+    window.addEventListener("focus", loadPendingCounts);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", loadPendingCounts);
+    };
+  }, [user, pathname]);
 
   useEffect(() => {
     setLoading(true);
@@ -170,6 +215,10 @@ export default function DashboardLayout({
                           const childSelected =
                             pathname === childHref ||
                             pathname.startsWith(`${childHref}/`);
+                          const pendingCount = pendingCountFor(
+                            childLabel,
+                            pendingCounts,
+                          );
                           const iconPath =
                             childLabel === "Tasks"
                               ? "M4 3.5h12v13H4z M7 7h.01 M9 7h4 M7 10h.01 M9 10h4 M7 13h.01 M9 13h4"
@@ -188,6 +237,14 @@ export default function DashboardLayout({
                                 <path d={iconPath} />
                               </svg>
                               {childLabel}
+                              {pendingCount !== undefined && pendingCount > 0 && (
+                                <span
+                                  aria-label={`${pendingCount} pending`}
+                                  className="sidebar-pending-count"
+                                >
+                                  {pendingCount}
+                                </span>
+                              )}
                             </Link>
                           );
                         })}
@@ -199,16 +256,25 @@ export default function DashboardLayout({
               const selected =
                 pathname === href ||
                 (href !== "/dashboard" && pathname.startsWith(`${href}/`));
+              const pendingCount = pendingCountFor(label, pendingCounts);
 
               return (
                 <Link
                   aria-current={selected ? "page" : undefined}
-                  className={selected ? "selected" : ""}
+                  className={`${selected ? "selected " : ""}${pendingCount !== undefined && pendingCount > 0 ? "has-pending-count" : ""}`}
                   href={href}
                   key={href}
                   title={label}
                 >
                   {label}
+                  {pendingCount !== undefined && pendingCount > 0 && (
+                    <span
+                      aria-label={`${pendingCount} pending`}
+                      className="sidebar-pending-count"
+                    >
+                      {pendingCount}
+                    </span>
+                  )}
                 </Link>
               );
             })}

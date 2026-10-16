@@ -8,6 +8,28 @@ import { PrismaService } from "../../prisma/prisma.service";
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async pendingCounts(user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const lead = leadScope(user);
+    const [tasks, meetings, callsAndMessages] = await Promise.all([
+      this.prisma.followUp.count({
+        where: {
+          status: "PENDING",
+          type: { in: ["Proposal Follow-up", "Negotiation"] },
+          lead,
+        },
+      }),
+      this.prisma.meeting.count({
+        where: { status: MeetingStatus.SCHEDULED, lead },
+      }),
+      this.prisma.callMessage.count({
+        where: { status: "PENDING", lead },
+      }),
+    ]);
+
+    return { tasks, meetings, callsAndMessages };
+  }
+
   async summary(user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const scope = leadScope(user);

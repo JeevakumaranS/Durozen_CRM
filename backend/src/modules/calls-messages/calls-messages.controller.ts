@@ -15,6 +15,7 @@ import { RolesGuard } from "../../common/guards/roles.guard";
 import { CallsMessagesService } from "./calls-messages.service";
 import { CompleteCallMessageDto } from "./dto/complete-call-message.dto";
 import { CreateCallMessageDto } from "./dto/create-call-message.dto";
+import { RescheduleCallMessageDto } from "./dto/reschedule-call-message.dto";
 
 @Controller("calls-messages")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -25,9 +26,11 @@ export class CallsMessagesController {
   @Get()
   list(
     @Query("status") status: string | undefined,
+    @Query("from") from: string | undefined,
+    @Query("to") to: string | undefined,
     @CurrentUser() user: { sub: string; role: string },
   ) {
-    return this.callsMessages.list(status, user);
+    return this.callsMessages.list({ status, from, to }, user);
   }
 
   @Post()
@@ -36,6 +39,15 @@ export class CallsMessagesController {
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.callsMessages.create(dto, user);
+  }
+
+  @Patch(":id/reschedule")
+  reschedule(
+    @Param("id") id: string,
+    @Body() dto: RescheduleCallMessageDto,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.callsMessages.reschedule(id, dto.dueAt, user);
   }
 
   @Patch(":id/complete")

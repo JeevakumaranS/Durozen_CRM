@@ -93,6 +93,11 @@ model Lead {
  @@index([followUpAt])
  @@map("leads")
 }
+model LeadNumberSequence {
+ year Int @id
+ lastNumber Int @map("last_number")
+ @@map("lead_number_sequences")
+}
 model Activity {
  id String @id @default(uuid(7)) @db.Uuid
  leadId String @map("lead_id") @db.Uuid

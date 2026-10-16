@@ -5,6 +5,8 @@ import {
 } from "@nestjs/common";
 import { FollowUpStatus, LeadStage, Prisma } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { formatBusinessDateTime } from "../../common/business-time";
+import { assertNoScheduledMeeting } from "../../common/scheduled-meeting";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CreateFollowUpDto } from "./dto/create-follow-up.dto";
@@ -128,9 +130,13 @@ export class FollowUpsService {
     if (filters.scope && !allowedScopes.includes(filters.scope)) {
       throw new BadRequestException("Invalid follow-up scope.");
     }
+    const statuses = filters.status
+      ?.split(",")
+      .filter(Boolean) as FollowUpStatus[] | undefined;
     if (
-      filters.status &&
-      !Object.values(FollowUpStatus).includes(filters.status as FollowUpStatus)
+      statuses?.some(
+        (status) => !Object.values(FollowUpStatus).includes(status),
+      )
     ) {
       throw new BadRequestException("Invalid follow-up status.");
     }
@@ -169,15 +175,28 @@ export class FollowUpsService {
     } else if (filters.scope === "completed") {
       conditions.push({ status: FollowUpStatus.COMPLETED });
     }
-    if (filters.status) {
-      conditions.push({ status: filters.status as FollowUpStatus });
+    if (statuses?.length) {
+      conditions.push({ status: { in: statuses } });
     }
-    if (filters.type?.trim()) {
-      conditions.push({ type: filters.type.trim() });
+    const types = filters.type
+      ?.split(",")
+      .map((type) => type.trim())
+      .filter(Boolean);
+    if (types?.length) {
+      conditions.push({ type: { in: types } });
     }
     if (filters.assignedBdeId) {
+      const assignedBdeIds = filters.assignedBdeId
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
       conditions.push({
-        lead: { assignedBdeId: filters.assignedBdeId },
+        lead: {
+          assignedBdeId:
+            assignedBdeIds.length === 1
+              ? assignedBdeIds[0]
+              : { in: assignedBdeIds },
+        },
       });
     }
     if (Object.keys(dateFilter).length) {
@@ -480,6 +499,7 @@ export class FollowUpsService {
         dto.scheduleMeeting &&
         dto.meetingAt
       ) {
+        await assertNoScheduledMeeting(tx, existing.leadId);
         const meetingAt = new Date(dto.meetingAt);
         const meetingNextAction = "Attend scheduled meeting";
         const meeting = await tx.meeting.create({
@@ -500,7 +520,7 @@ export class FollowUpsService {
             meetingId: meeting.id,
             userId: user.sub,
             type: "MEETING_SCHEDULED",
-            description: `${meeting.type} scheduled for ${meeting.meetingAt.toISOString()}`,
+            description: `${meeting.type} scheduled for ${formatBusinessDateTime(meeting.meetingAt)}`,
           },
         });
         await tx.followUp.create({

@@ -9,7 +9,6 @@ import {
   LeadStage as PrismaLeadStage,
   Prisma,
 } from "@prisma/client";
-import { randomUUID } from "node:crypto";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
@@ -224,65 +223,74 @@ export class LeadsService {
         "An active lead already uses this mobile number",
       );
 
-    return this.prisma.lead.create({
-      data: {
-        leadNumber: `DZN-${new Date().getFullYear()}-${randomUUID().slice(0, 8).toUpperCase()}`,
-        leadDate: dto.leadDate ? new Date(dto.leadDate) : new Date(),
-        customerName: dto.customerName,
-        businessName: dto.businessName,
-        businessCategory: dto.businessCategory,
-        mobileNumber: dto.mobileNumber,
-        email: dto.email,
-        location: dto.location,
-        leadSource: dto.leadSource,
-        priority: (dto.priority ?? "WARM") as LeadPriority,
-        estimatedBudget:
-          dto.estimatedBudget === undefined
-            ? undefined
-            : dto.estimatedBudget === null
-              ? null
-              : new Prisma.Decimal(dto.estimatedBudget),
-        assignedBdeId,
-        stage,
-        nextAction: dto.nextAction,
-        followUpAt,
-        remarks: dto.remarks,
-        requirement: dto.requirement,
-        finalDealValue: dto.finalDealValue,
-        wonService: dto.wonService,
-        paymentStatus: dto.paymentStatus,
-        expectedStartDate: dto.expectedStartDate
-          ? new Date(dto.expectedStartDate)
-          : undefined,
-        wonRemarks: dto.wonRemarks,
-        lostReason: dto.lostReason,
-        activities: {
-          create: {
-            type: "NOTE",
-            description: "Lead created",
-            user: { connect: { id: user.sub } },
+    const year = new Date().getFullYear();
+    return this.prisma.$transaction(async (tx) => {
+      const sequence = await tx.leadNumberSequence.upsert({
+        where: { year },
+        create: { year, lastNumber: 1 },
+        update: { lastNumber: { increment: 1 } },
+      });
+
+      return tx.lead.create({
+        data: {
+          leadNumber: `DZN-${year}-${String(sequence.lastNumber).padStart(5, "0")}`,
+          leadDate: dto.leadDate ? new Date(dto.leadDate) : new Date(),
+          customerName: dto.customerName,
+          businessName: dto.businessName,
+          businessCategory: dto.businessCategory,
+          mobileNumber: dto.mobileNumber,
+          email: dto.email,
+          location: dto.location,
+          leadSource: dto.leadSource,
+          priority: (dto.priority ?? "WARM") as LeadPriority,
+          estimatedBudget:
+            dto.estimatedBudget === undefined
+              ? undefined
+              : dto.estimatedBudget === null
+                ? null
+                : new Prisma.Decimal(dto.estimatedBudget),
+          assignedBdeId,
+          stage,
+          nextAction: dto.nextAction,
+          followUpAt,
+          remarks: dto.remarks,
+          requirement: dto.requirement,
+          finalDealValue: dto.finalDealValue,
+          wonService: dto.wonService,
+          paymentStatus: dto.paymentStatus,
+          expectedStartDate: dto.expectedStartDate
+            ? new Date(dto.expectedStartDate)
+            : undefined,
+          wonRemarks: dto.wonRemarks,
+          lostReason: dto.lostReason,
+          activities: {
+            create: {
+              type: "NOTE",
+              description: "Lead created",
+              user: { connect: { id: user.sub } },
+            },
           },
+          callMessages: CALL_MESSAGE_METHODS.has(dto.nextAction)
+            ? {
+                create: {
+                  userId: user.sub,
+                  dueAt: followUpAt!,
+                  contactMethod: dto.nextAction,
+                },
+              }
+            : undefined,
+          followUps: SALES_TASK_TYPES.has(dto.nextAction)
+            ? {
+                create: {
+                  dueAt: followUpAt!,
+                  type: dto.nextAction,
+                  nextAction: dto.nextAction,
+                },
+              }
+            : undefined,
         },
-        callMessages: CALL_MESSAGE_METHODS.has(dto.nextAction)
-          ? {
-              create: {
-                userId: user.sub,
-                dueAt: followUpAt!,
-                contactMethod: dto.nextAction,
-              },
-            }
-          : undefined,
-        followUps: SALES_TASK_TYPES.has(dto.nextAction)
-          ? {
-              create: {
-                dueAt: followUpAt!,
-                type: dto.nextAction,
-                nextAction: dto.nextAction,
-              },
-            }
-          : undefined,
-      },
-      include: { assignedBde: { select: { id: true, fullName: true } } },
+        include: { assignedBde: { select: { id: true, fullName: true } } },
+      });
     });
   }
 
