@@ -6,7 +6,10 @@ import {
 import { FollowUpStatus, LeadStage, MeetingStatus } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { formatBusinessDateTime } from "../../common/business-time";
-import { assertNoScheduledMeeting } from "../../common/scheduled-meeting";
+import {
+  assertLeadHasNoOtherActiveWork,
+  lockLeadActiveWork,
+} from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { canTransition } from "../pipeline/stage-rules";
@@ -132,6 +135,9 @@ export class CallsMessagesService {
       );
     }
     return this.prisma.$transaction(async (tx) => {
+      if (!completed) {
+        await assertLeadHasNoOtherActiveWork(tx, lead.id);
+      }
       const callMessage = await tx.callMessage.create({
         data: {
           leadId: lead.id,
@@ -265,6 +271,13 @@ export class CallsMessagesService {
       );
     }
     return this.prisma.$transaction(async (tx) => {
+      if (dto.scheduleMeeting && meetingAt) {
+        await assertLeadHasNoOtherActiveWork(tx, existing.leadId, {
+          callMessageId: existing.id,
+        });
+      } else {
+        await lockLeadActiveWork(tx, existing.leadId);
+      }
       const updated = await tx.callMessage.updateMany({
         where: { id, status: FollowUpStatus.PENDING },
         data: {
@@ -300,7 +313,6 @@ export class CallsMessagesService {
       });
 
       if (dto.scheduleMeeting && meetingAt && dto.meetingType) {
-        await assertNoScheduledMeeting(tx, existing.leadId);
         const meetingNextAction = "Attend scheduled meeting";
         const meeting = await tx.meeting.create({
           data: {

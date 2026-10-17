@@ -3,11 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { LeadStage, Prisma } from "@prisma/client";
+import { LeadStage } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { assertLeadHasNoOtherActiveWork } from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
+import { nextProposalNumber } from "./proposal-number.service";
 import { CreateProposalDto } from "./dto/create-proposal.dto";
 import { UpdateProposalDto } from "./dto/update-proposal.dto";
 
@@ -34,7 +36,7 @@ export class ProposalsService {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const year = new Date().getFullYear();
     return {
-      proposalNumber: await this.nextProposalNumber(year),
+      proposalNumber: await nextProposalNumber(year, this.prisma),
       year,
     };
   }
@@ -79,13 +81,14 @@ export class ProposalsService {
       dto.proposalAmount - (dto.discount ?? 0) + (dto.tax ?? 0);
     const year = new Date().getFullYear();
     return this.prisma.$transaction(async (tx) => {
+      await assertLeadHasNoOtherActiveWork(tx, lead.id);
       await tx.$queryRaw`
         WITH proposal_lock AS MATERIALIZED (
           SELECT pg_advisory_xact_lock(${year}::integer, 0::integer)
         )
         SELECT 1::integer AS locked FROM proposal_lock
       `;
-      const proposalNumber = await this.nextProposalNumber(year, tx);
+      const proposalNumber = await nextProposalNumber(year, tx);
       const stageChanged = lead.stage !== LeadStage.PROPOSAL;
       await tx.lead.update({
         where: { id: lead.id },
@@ -142,24 +145,6 @@ export class ProposalsService {
     });
   }
 
-  private async nextProposalNumber(
-    year: number,
-    client: Pick<Prisma.TransactionClient, "proposal"> = this.prisma,
-  ) {
-    const prefix = `DZN-${year}-`;
-    const existing = await client.proposal.findMany({
-      where: { proposalNumber: { startsWith: prefix } },
-      select: { proposalNumber: true },
-    });
-    const highest = existing.reduce((current, proposal) => {
-      const match = new RegExp(`^DZN-${year}-(\\d+)$`).exec(
-        proposal.proposalNumber,
-      );
-      return match ? Math.max(current, Number(match[1])) : current;
-    }, 0);
-    return `${prefix}${String(highest + 1).padStart(5, "0")}`;
-  }
-
   async update(id: string, dto: UpdateProposalDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const proposal = await this.prisma.proposal.findFirst({
@@ -171,6 +156,9 @@ export class ProposalsService {
     });
     if (!proposal) throw new NotFoundException("Proposal not found");
     return this.prisma.$transaction(async (tx) => {
+      if (dto.followUpAt) {
+        await assertLeadHasNoOtherActiveWork(tx, proposal.leadId);
+      }
       if (dto.followUpAt || dto.nextAction) {
         const nextAction =
           dto.nextAction ?? proposal.lead.nextAction ?? "Follow up on proposal";

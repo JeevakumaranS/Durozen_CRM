@@ -581,7 +581,12 @@ export function ActivitiesPage({
                           <small>{task.lead.mobileNumber}</small>
                         </td>
                         <td>{task.lead.businessName || "—"}</td>
-                        <td>{task.contactMethod}</td>
+                        <td>
+                          {task.contactMethod}
+                          {task.status === "PENDING" && (
+                            <span className="calls-pending-label">Pending</span>
+                          )}
+                        </td>
                         <td>
                           <span className="stage-pill">
                             {task.lead.stage.replaceAll("_", " ")}

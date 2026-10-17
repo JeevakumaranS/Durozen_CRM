@@ -11,7 +11,10 @@ import {
 } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { formatBusinessDateTime } from "../../common/business-time";
-import { assertNoScheduledMeeting } from "../../common/scheduled-meeting";
+import {
+  assertLeadHasNoOtherActiveWork,
+  lockLeadActiveWork,
+} from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
@@ -135,7 +138,7 @@ export class MeetingsService {
     this.requireLeadNextAction(lead.stage, dto.nextAction, followUpAt);
 
     return this.prisma.$transaction(async (tx) => {
-      await assertNoScheduledMeeting(tx, lead.id);
+      await assertLeadHasNoOtherActiveWork(tx, lead.id);
       const meeting = await tx.meeting.create({
         data: {
           leadId: lead.id,
@@ -398,6 +401,13 @@ export class MeetingsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (!isLost && followUpAt) {
+        await assertLeadHasNoOtherActiveWork(tx, existing.leadId, {
+          meetingId: id,
+        });
+      } else {
+        await lockLeadActiveWork(tx, existing.leadId);
+      }
       const completedAt = new Date();
       const changed = await tx.meeting.updateMany({
         where: { id, status: MeetingStatus.SCHEDULED, lead: leadScope(user) },

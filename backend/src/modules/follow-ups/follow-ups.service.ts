@@ -6,7 +6,10 @@ import {
 import { FollowUpStatus, LeadStage, Prisma } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import { formatBusinessDateTime } from "../../common/business-time";
-import { assertNoScheduledMeeting } from "../../common/scheduled-meeting";
+import {
+  assertLeadHasNoOtherActiveWork,
+  lockLeadActiveWork,
+} from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import {
   businessDateParts,
@@ -17,6 +20,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { CreateFollowUpDto } from "./dto/create-follow-up.dto";
 import { UpdateFollowUpDto } from "./dto/update-follow-up.dto";
 import { canTransition } from "../pipeline/stage-rules";
+import { nextProposalNumber } from "../proposals/proposal-number.service";
 
 type FollowUpFilters = {
   scope?: string;
@@ -277,6 +281,7 @@ export class FollowUpsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await assertLeadHasNoOtherActiveWork(tx, lead.id);
       const followUp = await tx.followUp.create({
         data: {
           leadId: lead.id,
@@ -316,7 +321,39 @@ export class FollowUpsService {
     const isExistingLeadClosed =
       existing.lead.stage === LeadStage.WON ||
       existing.lead.stage === LeadStage.LOST;
+    const isProposalCompletion =
+      dto.status === FollowUpStatus.COMPLETED &&
+      dto.nextStage === LeadStage.PROPOSAL;
     if (
+      isProposalCompletion &&
+      (existing.type !== "Proposal Follow-up" ||
+        existing.lead.stage !== LeadStage.MEETING)
+    ) {
+      throw new BadRequestException(
+        "A proposal can only be prepared from a meeting-stage proposal follow-up.",
+      );
+    }
+    if (
+      isProposalCompletion &&
+      (!dto.proposalDate ||
+        !dto.serviceProduct?.trim() ||
+        dto.proposalAmount === undefined ||
+        !dto.dueAt)
+    ) {
+      throw new BadRequestException(
+        "Proposal date, service or product, proposal amount, and next follow-up are required.",
+      );
+    }
+    if (
+      isProposalCompletion &&
+      (dto.discount ?? 0) > (dto.proposalAmount ?? 0)
+    ) {
+      throw new BadRequestException(
+        "Discount cannot exceed proposal amount.",
+      );
+    }
+    if (
+      !isProposalCompletion &&
       dto.status === FollowUpStatus.COMPLETED &&
       (!dto.contactDate ||
         !dto.contactType ||
@@ -397,6 +434,24 @@ export class FollowUpsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (
+        (isProposalCompletion || dto.scheduleMeeting) &&
+        dto.status === FollowUpStatus.COMPLETED
+      ) {
+        await assertLeadHasNoOtherActiveWork(tx, existing.leadId, {
+          followUpId: existing.id,
+        });
+      } else if (
+        dto.status === FollowUpStatus.RESCHEDULED &&
+        activeLead &&
+        closesPending
+      ) {
+        await assertLeadHasNoOtherActiveWork(tx, existing.leadId, {
+          followUpId: existing.id,
+        });
+      } else {
+        await lockLeadActiveWork(tx, existing.leadId);
+      }
       const transition = await tx.followUp.updateMany({
         where: { id, status: FollowUpStatus.PENDING },
         data: {
@@ -427,7 +482,38 @@ export class FollowUpsService {
           "This follow-up has already been updated.",
         );
       }
-      if (dto.status === FollowUpStatus.COMPLETED) {
+      if (isProposalCompletion) {
+        const proposalNumberYear = new Date().getFullYear();
+        await tx.$queryRaw`
+          WITH proposal_lock AS MATERIALIZED (
+            SELECT pg_advisory_xact_lock(${proposalNumberYear}::integer, 0::integer)
+          )
+          SELECT 1::integer AS locked FROM proposal_lock
+        `;
+        const proposalNumber = await nextProposalNumber(proposalNumberYear, tx);
+        const discount = dto.discount ?? 0;
+        await tx.proposal.create({
+          data: {
+            leadId: existing.leadId,
+            proposalNumber,
+            proposalDate: new Date(dto.proposalDate!),
+            serviceProduct: dto.serviceProduct!,
+            proposalAmount: dto.proposalAmount!,
+            discount,
+            tax: 0,
+            finalAmount: dto.proposalAmount! - discount,
+            followUpAt: new Date(dto.dueAt!),
+          },
+        });
+        await tx.activity.create({
+          data: {
+            leadId: existing.leadId,
+            userId: user.sub,
+            type: "PROPOSAL_SENT",
+            description: `Proposal ${proposalNumber} prepared for ${dto.serviceProduct!.trim()}`,
+          },
+        });
+      } else if (dto.status === FollowUpStatus.COMPLETED) {
         await tx.activity.create({
           data: {
             leadId: existing.leadId,
@@ -449,7 +535,6 @@ export class FollowUpsService {
         dto.scheduleMeeting &&
         dto.meetingAt
       ) {
-        await assertNoScheduledMeeting(tx, existing.leadId);
         const meetingAt = new Date(dto.meetingAt);
         const meetingNextAction = "Attend scheduled meeting";
         const meeting = await tx.meeting.create({
@@ -487,6 +572,15 @@ export class FollowUpsService {
           data: {
             followUpAt: meetingAt,
             nextAction: meetingNextAction,
+          },
+        });
+      } else if (isProposalCompletion) {
+        await tx.followUp.create({
+          data: {
+            leadId: existing.leadId,
+            dueAt: new Date(dto.dueAt!),
+            type: "Proposal Follow-up",
+            nextAction: "Follow up on proposal",
           },
         });
       } else if (activeLead && closesPending && dto.dueAt && dto.nextAction) {
@@ -534,8 +628,16 @@ export class FollowUpsService {
               nextStage === LeadStage.LOST
                 ? (dto.lostReason ?? "Not Interested")
                 : undefined,
-            nextAction: dto.scheduleMeeting ? undefined : null,
-            followUpAt: dto.scheduleMeeting ? undefined : null,
+            nextAction: isProposalCompletion
+              ? "Follow up on proposal"
+              : dto.scheduleMeeting
+                ? undefined
+                : null,
+            followUpAt: isProposalCompletion
+              ? new Date(dto.dueAt!)
+              : dto.scheduleMeeting
+                ? undefined
+                : null,
           },
           select: { id: true, stage: true },
         });

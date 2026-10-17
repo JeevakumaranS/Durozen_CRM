@@ -74,6 +74,25 @@ export class UpdateFollowUpDto {
   meetingAt?: string;
 
   @IsOptional()
+  @IsDateString()
+  proposalDate?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/\S/)
+  serviceProduct?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  proposalAmount?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discount?: number;
+
+  @IsOptional()
   @IsIn([
     "In-person",
     "Phone",

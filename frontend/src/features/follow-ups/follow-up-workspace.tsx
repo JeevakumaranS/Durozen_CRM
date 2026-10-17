@@ -89,6 +89,12 @@ const TYPES = [
 const businessInputValue = businessDateTimeInputValue;
 const businessDateTimeIso = businessDateTimeToIso;
 const formatDate = formatBusinessDateTime;
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 2,
+  }).format(value);
 const businessDateKey = (value: Date) => {
   const values = Object.fromEntries(
     new Intl.DateTimeFormat("en", {
@@ -143,6 +149,10 @@ export function FollowUpWorkspace() {
   const [outcomeNotes, setOutcomeNotes] = useState("");
   const [contactDate, setContactDate] = useState(businessDateKey(new Date()));
   const [contactType, setContactType] = useState<ContactType>("Phone Call");
+  const [proposalDate, setProposalDate] = useState(businessDateKey(new Date()));
+  const [serviceProduct, setServiceProduct] = useState("");
+  const [proposalAmount, setProposalAmount] = useState("");
+  const [discount, setDiscount] = useState("");
   const [customerResponse, setCustomerResponse] = useState("");
   const [requirement, setRequirement] = useState("");
   const [selectedNextStage, setSelectedNextStage] =
@@ -291,6 +301,8 @@ export function FollowUpWorkspace() {
   async function updateFollowUp(item: FollowUp) {
     if (!editing) return;
     const completing = editing.status === "COMPLETED";
+    const preparingProposal =
+      completing && selectedNextStage === "PROPOSAL";
     const scheduleMeeting =
       completing &&
       selectedNextStage === "INTERESTED" &&
@@ -300,42 +312,56 @@ export function FollowUpWorkspace() {
       if (!selectedNextStage) {
         nextErrors.nextAction = "Choose the next action.";
       }
-      if (
-        selectedNextStage === "INTERESTED" &&
-        meetingChoice !== "yes" &&
-        meetingChoice !== "no"
-      ) {
-        nextErrors.meetingChoice = "Choose Yes or No.";
-      }
-      if (selectedNextStage !== "LOST") {
-        if (!customerResponse.trim()) {
-          nextErrors.customerResponse = "Enter the next customer response.";
+      if (preparingProposal) {
+        if (!serviceProduct.trim() || !proposalAmount || !nextDueAt) {
+          notify(
+            "Enter the service or product, proposal amount, and next follow-up.",
+            "error",
+          );
+          return;
         }
-        if (!requirement.trim()) {
-          nextErrors.requirement = "Enter the requirements.";
+        if (Number(discount || 0) > Number(proposalAmount)) {
+          notify("Discount cannot exceed proposal amount.", "error");
+          return;
         }
-      }
-      if (scheduleMeeting) {
-        if (!meetingDate) {
-          nextErrors.meetingDate = "Choose a meeting date.";
-        } else if (meetingDate < businessDateKey(new Date())) {
-          nextErrors.meetingDate = "Meeting date cannot be in the past.";
-        }
-        if (!meetingTime) {
-          nextErrors.meetingTime = "Choose a meeting time.";
-        }
-        if (!meetingType) {
-          nextErrors.meetingType = "Choose a meeting type.";
-        }
+      } else {
         if (
-          meetingDate &&
-          meetingTime &&
-          !nextErrors.meetingDate &&
-          new Date(
-            businessDateTimeIso(`${meetingDate}T${meetingTime}`),
-          ).getTime() <= Date.now()
+          selectedNextStage === "INTERESTED" &&
+          meetingChoice !== "yes" &&
+          meetingChoice !== "no"
         ) {
-          nextErrors.meetingTime = "Meeting date and time must be in the future.";
+          nextErrors.meetingChoice = "Choose Yes or No.";
+        }
+        if (selectedNextStage !== "LOST") {
+          if (!customerResponse.trim()) {
+            nextErrors.customerResponse = "Enter the next customer response.";
+          }
+          if (!requirement.trim()) {
+            nextErrors.requirement = "Enter the requirements.";
+          }
+        }
+        if (scheduleMeeting) {
+          if (!meetingDate) {
+            nextErrors.meetingDate = "Choose a meeting date.";
+          } else if (meetingDate < businessDateKey(new Date())) {
+            nextErrors.meetingDate = "Meeting date cannot be in the past.";
+          }
+          if (!meetingTime) {
+            nextErrors.meetingTime = "Choose a meeting time.";
+          }
+          if (!meetingType) {
+            nextErrors.meetingType = "Choose a meeting type.";
+          }
+          if (
+            meetingDate &&
+            meetingTime &&
+            !nextErrors.meetingDate &&
+            new Date(
+              businessDateTimeIso(`${meetingDate}T${meetingTime}`),
+            ).getTime() <= Date.now()
+          ) {
+            nextErrors.meetingTime = "Meeting date and time must be in the future.";
+          }
         }
       }
       setCompletionErrors(nextErrors);
@@ -370,21 +396,27 @@ export function FollowUpWorkspace() {
           dueAt: completing
             ? scheduleMeeting
               ? businessDateTimeIso(`${meetingDate}T${meetingTime}`)
-              : undefined
+              : preparingProposal
+                ? businessDateTimeIso(nextDueAt)
+                : undefined
             : nextDueAt && nextActionText.trim()
               ? businessDateTimeIso(nextDueAt)
               : undefined,
           nextAction: completing
-            ? undefined
+            ? preparingProposal
+              ? "Follow up on proposal"
+              : undefined
             : nextActionText.trim() || undefined,
           remarks:
-            editing.status === "COMPLETED"
+            preparingProposal
+              ? undefined
+              : editing.status === "COMPLETED"
               ? outcomeNotes.trim() || null
               : outcomeNotes.trim() || undefined,
           ...(editing.status === "RESCHEDULED"
             ? { rescheduleReason }
             : {}),
-          ...(editing.status === "COMPLETED"
+          ...(editing.status === "COMPLETED" && !preparingProposal
             ? {
                 contactDate: new Date(
                   `${contactDate}T00:00:00.000Z`,
@@ -396,22 +428,28 @@ export function FollowUpWorkspace() {
                     ? undefined
                     : requirement.trim(),
                 remarks: outcomeNotes.trim() || null,
-                ...(selectedNextStage
-                  ? {
-                      nextStage: selectedNextStage,
-                      ...(selectedNextStage === "INTERESTED"
-                        ? { scheduleMeeting }
-                        : {}),
-                      ...(scheduleMeeting
-                        ? {
-                            meetingAt: businessDateTimeIso(
-                              `${meetingDate}T${meetingTime}`,
-                            ),
-                            meetingType,
-                          }
-                        : {}),
-                    }
-                  : {}),
+              }
+            : {}),
+          ...(editing.status === "COMPLETED" && selectedNextStage
+            ? { nextStage: selectedNextStage }
+            : {}),
+          ...(scheduleMeeting
+            ? {
+                scheduleMeeting,
+                meetingAt: businessDateTimeIso(
+                  `${meetingDate}T${meetingTime}`,
+                ),
+                meetingType,
+              }
+            : {}),
+          ...(preparingProposal
+            ? {
+                proposalDate: new Date(
+                  `${proposalDate}T00:00:00.000Z`,
+                ).toISOString(),
+                serviceProduct: serviceProduct.trim(),
+                proposalAmount: Number(proposalAmount),
+                discount: Number(discount || 0),
               }
             : {}),
         }),
@@ -436,7 +474,7 @@ export function FollowUpWorkspace() {
             : scheduleMeeting
               ? "Lead moved to Interested and meeting scheduled."
               : selectedNextStage === "PROPOSAL"
-                ? "Lead moved to Proposal."
+                ? "Proposal prepared and follow-up scheduled."
               : selectedNextStage === "INTERESTED"
                 ? "Lead moved to Interested."
                 : "Lead moved to Contacted."
@@ -470,6 +508,10 @@ export function FollowUpWorkspace() {
         CONTACT_TYPES.find((option) => option === followUpContactType) ??
         "Phone Call",
     );
+    setProposalDate(businessDateKey(new Date()));
+    setServiceProduct("");
+    setProposalAmount("");
+    setDiscount("");
     setCustomerResponse("");
     setRequirement("");
     setMeetingChoice("");
@@ -477,7 +519,13 @@ export function FollowUpWorkspace() {
     setMeetingDate("");
     setMeetingTime("");
     setMeetingType("");
-    setSelectedNextStage("");
+    setSelectedNextStage(
+      status === "COMPLETED" &&
+        item.type === "Proposal Follow-up" &&
+        item.lead.stage === "MEETING"
+        ? "PROPOSAL"
+        : "",
+    );
   }
 
   const completingItem =
@@ -488,6 +536,7 @@ export function FollowUpWorkspace() {
     editing?.status === "RESCHEDULED"
       ? items.find((item) => item.id === editing.id)
       : undefined;
+  const preparingProposal = selectedNextStage === "PROPOSAL";
 
   return (
     <main className="lead-workspace follow-up-workspace">
@@ -870,8 +919,12 @@ export function FollowUpWorkspace() {
           >
             <div className="modal-heading">
               <div>
-                <p className="eyebrow">CUSTOMER CONTACT</p>
-                <h2 id="complete-follow-up-title">Complete call</h2>
+                <p className="eyebrow">
+                  {preparingProposal ? "PROPOSAL DETAILS" : "TASK COMPLETION"}
+                </p>
+                <h2 id="complete-follow-up-title">
+                  {preparingProposal ? "Prepare proposal" : "Complete task"}
+                </h2>
               </div>
               <button
                 className="modal-close"
@@ -889,103 +942,180 @@ export function FollowUpWorkspace() {
                 void updateFollowUp(completingItem);
               }}
             >
-              <label>
-                Lead Name
-                <input disabled value={completingItem.lead.customerName} />
-              </label>
-              <label>
-                Contact Type
-                <input disabled value={contactType} />
-              </label>
-              <label>
-                Contact Date
-                <input disabled type="date" value={contactDate} />
-              </label>
-              <label>
-                Next Action *
-                <select
-                  value={selectedNextStage}
-                  aria-invalid={!!completionErrors.nextAction}
-                  onChange={(event) => {
-                    const stage = event.target.value as NextLeadStage | "";
-                    setSelectedNextStage(stage);
-                    setMeetingChoice("");
-                    setMeetingDate("");
-                    setMeetingTime("");
-                    setMeetingType("");
-                    setCompletionErrors({});
-                  }}
-                >
-                  <option value="">Choose next action</option>
-                  <option value="INTERESTED">Interested</option>
-                  {completingItem.type === "Proposal Follow-up" &&
-                    completingItem.lead.stage === "MEETING" && (
-                      <option value="PROPOSAL">Proposal</option>
-                    )}
-                  <option value="LOST">Not Interested</option>
-                  {!(completingItem.type === "Proposal Follow-up" &&
-                    completingItem.lead.stage === "MEETING") && (
-                    <option value="CONTACTED">Decision Pending</option>
-                  )}
-                </select>
-                {completionErrors.nextAction && (
-                  <small className="field-error">
-                    {completionErrors.nextAction}
-                  </small>
-                )}
-              </label>
-              {selectedNextStage !== "LOST" && (
+              {preparingProposal ? (
                 <>
-                  <label className="form-wide">
-                    Next Customer Response *
-                    <textarea
-                      aria-invalid={!!completionErrors.customerResponse}
-                      rows={3}
-                      value={customerResponse}
-                      onChange={(event) => {
-                        setCustomerResponse(event.target.value);
-                        setCompletionErrors((errors) => ({
-                          ...errors,
-                          customerResponse: undefined,
-                        }));
-                      }}
+                  <label>
+                    Lead name
+                    <input disabled value={completingItem.lead.customerName} />
+                  </label>
+                  <label>
+                    Lead number
+                    <input disabled value={completingItem.lead.mobileNumber} />
+                  </label>
+                  <label>
+                    Proposal date
+                    <input disabled type="date" value={proposalDate} />
+                  </label>
+                  <label>
+                    Service / Product *
+                    <input
+                      required
+                      value={serviceProduct}
+                      onChange={(event) => setServiceProduct(event.target.value)}
                     />
-                    {completionErrors.customerResponse && (
+                  </label>
+                  <label>
+                    Proposal Amount (₹) *
+                    <input
+                      required
+                      min="0"
+                      step="0.01"
+                      type="number"
+                      value={proposalAmount}
+                      onChange={(event) => setProposalAmount(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Discount (₹)
+                    <input
+                      min="0"
+                      step="0.01"
+                      type="number"
+                      value={discount}
+                      onChange={(event) => setDiscount(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-wide">
+                    Final Amount (₹)
+                    <input
+                      disabled
+                      value={
+                        proposalAmount
+                            ? formatCurrency(Math.max(
+                              Number(proposalAmount) - Number(discount || 0),
+                                0,
+                              ))
+                          : ""
+                      }
+                    />
+                  </label>
+                  <ClockDateTimePicker
+                    className="form-wide"
+                    label="Next follow-up *"
+                    required
+                    minValue={businessInputValue(new Date())}
+                    value={nextDueAt}
+                    onChange={setNextDueAt}
+                  />
+                  <button
+                    className="secondary-action form-wide"
+                    type="button"
+                    onClick={() => setSelectedNextStage("")}
+                  >
+                    Choose a different outcome
+                  </button>
+                </>
+              ) : (
+                <>
+                  <label>
+                    Lead Name
+                    <input disabled value={completingItem.lead.customerName} />
+                  </label>
+                  <label>
+                    Contact Type
+                    <input disabled value={contactType} />
+                  </label>
+                  <label>
+                    Contact Date
+                    <input disabled type="date" value={contactDate} />
+                  </label>
+                  <label>
+                    Next Action *
+                    <select
+                      value={selectedNextStage}
+                      aria-invalid={!!completionErrors.nextAction}
+                      onChange={(event) => {
+                        const stage = event.target.value as NextLeadStage | "";
+                        setSelectedNextStage(stage);
+                        setMeetingChoice("");
+                        setMeetingDate("");
+                        setMeetingTime("");
+                        setMeetingType("");
+                        setCompletionErrors({});
+                      }}
+                    >
+                      <option value="">Choose next action</option>
+                      <option value="INTERESTED">Interested</option>
+                      {completingItem.type === "Proposal Follow-up" &&
+                        completingItem.lead.stage === "MEETING" && (
+                          <option value="PROPOSAL">Proposal</option>
+                        )}
+                      <option value="LOST">Not Interested</option>
+                      {!(completingItem.type === "Proposal Follow-up" &&
+                        completingItem.lead.stage === "MEETING") && (
+                        <option value="CONTACTED">Decision Pending</option>
+                      )}
+                    </select>
+                    {completionErrors.nextAction && (
                       <small className="field-error">
-                        {completionErrors.customerResponse}
+                        {completionErrors.nextAction}
                       </small>
                     )}
                   </label>
+                  {selectedNextStage !== "LOST" && (
+                    <>
+                      <label className="form-wide">
+                        Next Customer Response *
+                        <textarea
+                          aria-invalid={!!completionErrors.customerResponse}
+                          rows={3}
+                          value={customerResponse}
+                          onChange={(event) => {
+                            setCustomerResponse(event.target.value);
+                            setCompletionErrors((errors) => ({
+                              ...errors,
+                              customerResponse: undefined,
+                            }));
+                          }}
+                        />
+                        {completionErrors.customerResponse && (
+                          <small className="field-error">
+                            {completionErrors.customerResponse}
+                          </small>
+                        )}
+                      </label>
+                      <label className="form-wide">
+                        Requirements *
+                        <textarea
+                          aria-invalid={!!completionErrors.requirement}
+                          rows={2}
+                          value={requirement}
+                          onChange={(event) => {
+                            setRequirement(event.target.value);
+                            setCompletionErrors((errors) => ({
+                              ...errors,
+                              requirement: undefined,
+                            }));
+                          }}
+                        />
+                        {completionErrors.requirement && (
+                          <small className="field-error">
+                            {completionErrors.requirement}
+                          </small>
+                        )}
+                      </label>
+                    </>
+                  )}
                   <label className="form-wide">
-                    Requirements *
+                    Remarks
                     <textarea
-                      aria-invalid={!!completionErrors.requirement}
                       rows={2}
-                      value={requirement}
-                      onChange={(event) => {
-                        setRequirement(event.target.value);
-                        setCompletionErrors((errors) => ({
-                          ...errors,
-                          requirement: undefined,
-                        }));
-                      }}
+                      value={outcomeNotes}
+                      onChange={(event) => setOutcomeNotes(event.target.value)}
                     />
-                    {completionErrors.requirement && (
-                      <small className="field-error">
-                        {completionErrors.requirement}
-                      </small>
-                    )}
                   </label>
                 </>
               )}
-              <label className="form-wide">
-                Remarks
-                <textarea
-                  rows={2}
-                  value={outcomeNotes}
-                  onChange={(event) => setOutcomeNotes(event.target.value)}
-                />
-              </label>
               {selectedNextStage === "INTERESTED" && (
                 <div className="form-wide meeting-schedule-control">
                   <span>Schedule a meeting?</span>
@@ -1041,7 +1171,11 @@ export function FollowUpWorkspace() {
                 </div>
               )}
               <div className="form-footer">
-                <p>Save the contact outcome and update this lead.</p>
+                <p>
+                  {preparingProposal
+                    ? "Saving creates the proposal and schedules its next follow-up."
+                    : "Save the contact outcome and update this lead."}
+                </p>
                 <div>
                   <button
                     className="secondary-action"
@@ -1052,7 +1186,11 @@ export function FollowUpWorkspace() {
                     Cancel
                   </button>
                   <button className="primary" disabled={busy}>
-                    {busy ? "Saving..." : "Save"}
+                    {busy
+                      ? "Saving..."
+                      : preparingProposal
+                        ? "Prepare proposal"
+                        : "Save"}
                   </button>
                 </div>
               </div>

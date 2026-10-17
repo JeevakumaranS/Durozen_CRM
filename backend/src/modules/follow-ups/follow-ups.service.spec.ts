@@ -217,12 +217,16 @@ test("a concurrent repeat transition cannot create a second successor", async ()
     followUp: { findFirst: async () => existing },
     $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
       operation({
+        $queryRaw: async () => [],
         followUp: {
+          findFirst: async () => null,
           updateMany: async () => ({ count: 0 }),
           create: async () => {
             successorCreated = true;
           },
         },
+        callMessage: { findFirst: async () => null },
+        meeting: { findFirst: async () => null },
         lead: { update: async () => undefined },
       }),
   } as unknown as PrismaService);
@@ -302,7 +306,9 @@ test("rescheduling creates one successor and updates the lead next action", asyn
     followUp: { findFirst: async () => existing },
     $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
       operation({
+        $queryRaw: async () => [],
         followUp: {
+          findFirst: async () => null,
           updateMany: async () => ({ count: 1 }),
           create: async (args: { data: Record<string, unknown> }) => {
             successorCount += 1;
@@ -311,6 +317,8 @@ test("rescheduling creates one successor and updates the lead next action", asyn
           },
           findUniqueOrThrow: async () => ({ id: existing.id }),
         },
+        callMessage: { findFirst: async () => null },
+        meeting: { findFirst: async () => null },
         lead: {
           update: async (args: { data: Record<string, unknown> }) => {
             leadUpdate = args.data;
@@ -395,7 +403,9 @@ test("completing a follow-up records customer contact details and updates lead d
     followUp: { findFirst: async () => existing },
     $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
       operation({
+        $queryRaw: async () => [],
         followUp: {
+          findFirst: async () => null,
           updateMany: async () => ({ count: 1 }),
           create: async () => undefined,
           findUniqueOrThrow: async () => ({ id: existing.id }),
@@ -498,7 +508,9 @@ test("Not Interested completion moves the lead to Lost without follow-up details
     followUp: { findFirst: async () => existing },
     $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
       operation({
+        $queryRaw: async () => [],
         followUp: {
+          findFirst: async () => null,
           updateMany: async () => ({ count: 1 }),
           findUniqueOrThrow: async () => ({ id: existing.id }),
         },
@@ -560,14 +572,18 @@ test("completing an interested follow-up with meeting details creates one meetin
     followUp: { findFirst: async () => existing },
     $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
       operation({
+        $queryRaw: async () => [],
         followUp: {
+          findFirst: async () => null,
           updateMany: async () => ({ count: 1 }),
           create: async (args: { data: Record<string, unknown> }) => {
             meetingFollowUp = args.data;
           },
           findUniqueOrThrow: async () => ({ id: existing.id }),
         },
+        callMessage: { findFirst: async () => null },
         meeting: {
+          findFirst: async () => null,
           create: async (args: { data: Record<string, unknown> }) => {
             meetingData = args.data;
             return {
@@ -634,5 +650,96 @@ test("completing an interested follow-up with meeting details creates one meetin
   assert.equal(
     leadUpdates.find((update) => update.nextAction)?.nextAction,
     "Attend scheduled meeting",
+  );
+});
+
+test("proposal follow-up completion saves a proposal and schedules its next follow-up", async () => {
+  let proposalData: Record<string, unknown> | undefined;
+  let successor: Record<string, unknown> | undefined;
+  let proposalActivity: Record<string, unknown> | undefined;
+  const leadUpdates: Record<string, unknown>[] = [];
+  const existing = {
+    id: "follow-up-proposal",
+    leadId: "lead-1",
+    meetingId: null,
+    status: FollowUpStatus.PENDING,
+    dueAt: new Date(Date.now() - 86400000),
+    nextAction: "Prepare a proposal",
+    remarks: null,
+    type: "Proposal Follow-up",
+    lead: {
+      stage: LeadStage.MEETING,
+      followUpAt: new Date(Date.now() - 86400000),
+      nextAction: "Prepare a proposal",
+    },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+    $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
+      operation({
+        $queryRaw: async () => [],
+        followUp: {
+          findFirst: async () => null,
+          updateMany: async () => ({ count: 1 }),
+          create: async (args: { data: Record<string, unknown> }) => {
+            successor = args.data;
+          },
+          findUniqueOrThrow: async () => ({ id: existing.id }),
+        },
+        callMessage: { findFirst: async () => null },
+        meeting: { findFirst: async () => null },
+        proposal: {
+          findMany: async () => [],
+          create: async (args: { data: Record<string, unknown> }) => {
+            proposalData = args.data;
+          },
+        },
+        activity: {
+          create: async (args: { data: Record<string, unknown> }) => {
+            proposalActivity = args.data;
+          },
+        },
+        lead: {
+          update: async (args: { data: Record<string, unknown> }) => {
+            leadUpdates.push(args.data);
+            return { id: existing.leadId, stage: args.data.stage };
+          },
+        },
+      }),
+  } as unknown as PrismaService);
+  const nextFollowUpAt = new Date(Date.now() + 86400000);
+  const proposalDate = new Date().toISOString();
+
+  await service.update(
+    existing.id,
+    {
+      status: FollowUpStatus.COMPLETED,
+      nextStage: LeadStage.PROPOSAL,
+      proposalDate,
+      serviceProduct: "CRM setup",
+      proposalAmount: 125000,
+      discount: 5000,
+      dueAt: nextFollowUpAt.toISOString(),
+    },
+    bde,
+  );
+
+  assert.equal(proposalData?.leadId, existing.leadId);
+  assert.equal(proposalData?.serviceProduct, "CRM setup");
+  assert.equal(proposalData?.proposalAmount, 125000);
+  assert.equal(proposalData?.discount, 5000);
+  assert.equal(proposalData?.finalAmount, 120000);
+  assert.equal(proposalActivity?.type, "PROPOSAL_SENT");
+  assert.equal(successor?.type, "Proposal Follow-up");
+  assert.equal(successor?.nextAction, "Follow up on proposal");
+  assert.equal(
+    (successor?.dueAt as Date).getTime(),
+    nextFollowUpAt.getTime(),
+  );
+  assert.equal(leadUpdates.at(-1)?.stage, LeadStage.PROPOSAL);
+  assert.equal(leadUpdates.at(-1)?.nextAction, "Follow up on proposal");
+  assert.equal(
+    (leadUpdates.at(-1)?.followUpAt as Date).getTime(),
+    nextFollowUpAt.getTime(),
   );
 });

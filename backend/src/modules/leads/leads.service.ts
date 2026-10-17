@@ -10,6 +10,10 @@ import {
   Prisma,
 } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import {
+  assertLeadHasNoOtherActiveWork,
+  lockLeadActiveWork,
+} from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { CreateLeadDto, LeadStage } from "./dto/create-lead.dto";
@@ -105,6 +109,17 @@ export class LeadsService {
     });
     if (!lead) throw new NotFoundException("Lead not found");
     return this.prisma.$transaction(async (tx) => {
+      const nextDate = dto.followUpAt
+        ? new Date(dto.followUpAt)
+        : lead.followUpAt;
+      if (
+        nextDate &&
+        dto.nextAction &&
+        (CALL_MESSAGE_METHODS.has(dto.nextAction) ||
+          SALES_TASK_TYPES.has(dto.type))
+      ) {
+        await assertLeadHasNoOtherActiveWork(tx, id);
+      }
       const activity = await tx.activity.create({
         data: {
           leadId: id,
@@ -407,7 +422,15 @@ export class LeadsService {
         new Date(dto.followUpAt).getTime() !==
           existing.followUpAt?.getTime()) ||
       (dto.nextAction !== undefined && dto.nextAction !== existing.nextAction);
-    return this.prisma.lead.update({
+    return this.prisma.$transaction(async (tx) => {
+      if (
+        followUpChanged ||
+        nextStage === "WON" ||
+        nextStage === "LOST"
+      ) {
+        await lockLeadActiveWork(tx, id);
+      }
+      return tx.lead.update({
       where: { id },
       data: {
         customerName: dto.customerName,
@@ -517,6 +540,7 @@ export class LeadsService {
               : undefined,
       },
       include: { assignedBde: { select: { id: true, fullName: true } } },
+      });
     });
   }
 }

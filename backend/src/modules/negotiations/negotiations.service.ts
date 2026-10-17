@@ -5,6 +5,7 @@ import {
 } from "@nestjs/common";
 import { LeadStage } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { assertLeadHasNoOtherActiveWork } from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
@@ -51,6 +52,7 @@ export class NegotiationsService {
       (latestProposal ? Number(latestProposal.finalAmount) : undefined);
 
     return this.prisma.$transaction(async (tx) => {
+      await assertLeadHasNoOtherActiveWork(tx, lead.id);
       const stageChanged = lead.stage !== LeadStage.NEGOTIATION;
       await tx.lead.update({
         where: { id: lead.id },
