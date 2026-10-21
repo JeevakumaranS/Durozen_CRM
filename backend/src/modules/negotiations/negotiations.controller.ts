@@ -1,9 +1,18 @@
-import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { Roles } from "../../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { CreateNegotiationDto } from "./dto/create-negotiation.dto";
+import { UpdateNegotiationDto } from "./dto/update-negotiation.dto";
 import { NegotiationsService } from "./negotiations.service";
 
 @Controller("negotiations")
@@ -19,5 +28,12 @@ export class NegotiationsController {
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.negotiations.create(dto, user);
+  }
+  @Patch(":id") update(
+    @Param("id") id: string,
+    @Body() dto: UpdateNegotiationDto,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.negotiations.update(id, dto, user);
   }
 }

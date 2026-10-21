@@ -5,7 +5,10 @@ import {
 } from "@nestjs/common";
 import { LeadStage } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
-import { assertLeadHasNoOtherActiveWork } from "../../common/active-lead-work";
+import {
+  assertLeadHasNoOtherActiveWork,
+  lockLeadActiveWork,
+} from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
@@ -155,22 +158,105 @@ export class ProposalsService {
       include: { lead: true },
     });
     if (!proposal) throw new NotFoundException("Proposal not found");
+    if (dto.nextAction && !dto.customerResponse?.trim()) {
+      throw new BadRequestException("A customer response is required.");
+    }
+    if (
+      dto.nextAction === "Negotiation" &&
+      dto.customerExpectedAmount === undefined
+    ) {
+      throw new BadRequestException(
+        "The customer's expected amount is required to start a negotiation.",
+      );
+    }
+    if (dto.nextAction && proposal.responseSavedAt) {
+      throw new BadRequestException(
+        "A response has already been saved for this proposal.",
+      );
+    }
+    const targetStage =
+      dto.nextAction === "Negotiation"
+        ? LeadStage.NEGOTIATION
+        : dto.nextAction === "Won"
+          ? LeadStage.WON
+          : dto.nextAction === "Lost"
+            ? LeadStage.LOST
+            : undefined;
+    if (dto.nextAction === "Lost" && !dto.lostReason?.trim()) {
+      throw new BadRequestException("A lost reason is required.");
+    }
+    if (targetStage) {
+      this.transitions.assertAllowed(proposal.lead.stage, targetStage);
+    }
+    const stageChanged =
+      targetStage !== undefined && targetStage !== proposal.lead.stage;
+    const isClosedOutcome =
+      targetStage === LeadStage.WON || targetStage === LeadStage.LOST;
     return this.prisma.$transaction(async (tx) => {
+      const responseSavedAt = dto.nextAction ? new Date() : undefined;
+      if (responseSavedAt) {
+        const responseUpdate = await tx.proposal.updateMany({
+          where: { id, responseSavedAt: null },
+          data: {
+            customerResponse: dto.customerResponse!.trim(),
+            responseSavedAt,
+          },
+        });
+        if (responseUpdate.count !== 1) {
+          throw new BadRequestException(
+            "A response has already been saved for this proposal.",
+          );
+        }
+      }
       if (dto.followUpAt) {
         await assertLeadHasNoOtherActiveWork(tx, proposal.leadId);
       }
-      if (dto.followUpAt || dto.nextAction) {
+      if (isClosedOutcome) {
+        await lockLeadActiveWork(tx, proposal.leadId);
+      }
+      if (dto.followUpAt || dto.nextAction || targetStage) {
         const nextAction =
-          dto.nextAction ?? proposal.lead.nextAction ?? "Follow up on proposal";
+          dto.nextAction === "Negotiation"
+            ? "Follow up on negotiation"
+            : dto.nextAction ?? proposal.lead.nextAction ?? "Follow up on proposal";
         const dueAt = dto.followUpAt
           ? new Date(dto.followUpAt)
           : proposal.lead.followUpAt;
         await tx.lead.update({
           where: { id: proposal.leadId },
           data: {
-            nextAction,
-            followUpAt: dto.followUpAt ? dueAt : undefined,
-            ...(dto.followUpAt
+            stage: targetStage,
+            stageEnteredAt: stageChanged ? new Date() : undefined,
+            nextAction: isClosedOutcome ? null : nextAction,
+            followUpAt: isClosedOutcome
+              ? null
+              : dto.followUpAt
+                ? dueAt
+                : undefined,
+            lostReason:
+              targetStage === LeadStage.LOST ? dto.lostReason!.trim() : undefined,
+            finalDealValue:
+              targetStage === LeadStage.WON ? proposal.finalAmount : undefined,
+            wonService:
+              targetStage === LeadStage.WON
+                ? proposal.serviceProduct
+                : undefined,
+            ...(isClosedOutcome
+              ? {
+                  followUps: {
+                    updateMany: {
+                      where: { status: "PENDING" },
+                      data: { status: "CANCELLED" },
+                    },
+                  },
+                  callMessages: {
+                    updateMany: {
+                      where: { status: "PENDING" },
+                      data: { status: "CANCELLED" },
+                    },
+                  },
+                }
+              : dto.followUpAt
               ? {
                   followUps: {
                     create: {
@@ -184,10 +270,56 @@ export class ProposalsService {
           },
         });
       }
+      if (dto.nextAction === "Negotiation") {
+        const negotiation = await tx.negotiation.create({
+          data: {
+            leadId: proposal.leadId,
+            originalProposalAmount: proposal.finalAmount,
+            customerExpectedAmount: dto.customerExpectedAmount!,
+            customerConcern: dto.customerResponse!.trim(),
+            nextAction: "Follow up on negotiation",
+            followUpAt:
+              proposal.followUpAt ??
+              proposal.lead.followUpAt ??
+              new Date(),
+          },
+        });
+        const pendingFollowUps = await tx.followUp.updateMany({
+          where: {
+            leadId: proposal.leadId,
+            type: "Proposal Follow-up",
+            status: "PENDING",
+          },
+          data: {
+            type: "Negotiation",
+            nextAction: "Follow up on negotiation",
+            negotiationId: negotiation.id,
+          },
+        });
+        if (pendingFollowUps.count === 0) {
+          const followUp = await tx.followUp.create({
+            data: {
+              leadId: proposal.leadId,
+              type: "Negotiation",
+              nextAction: "Follow up on negotiation",
+              dueAt:
+                proposal.followUpAt ??
+                proposal.lead.followUpAt ??
+                new Date(),
+            },
+          });
+          await tx.$executeRaw`
+            UPDATE "follow_ups"
+            SET "negotiation_id" = ${negotiation.id}::uuid
+            WHERE "id" = ${followUp.id}::uuid
+          `;
+        }
+      }
       return tx.proposal.update({
         where: { id },
         data: {
           customerResponse: dto.customerResponse,
+          responseSavedAt,
           followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : undefined,
           remarks: dto.remarks,
         },

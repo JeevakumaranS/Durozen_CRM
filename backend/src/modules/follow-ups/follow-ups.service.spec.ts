@@ -34,9 +34,46 @@ test("lists follow-ups with assigned-BDE scope and requested filters", async () 
   const conditions = (
     query as { where: { AND: Array<Record<string, unknown>> } }
   ).where.AND;
-  assert.equal(conditions.length, 7);
+  assert.equal(conditions.length, 8);
   assert.deepEqual(conditions[0], { lead: { assignedBdeId: bde.sub } });
   assert.ok(conditions.some((condition) => "OR" in condition));
+});
+
+test("hides pending proposal follow-up duplicates when the matching task is completed", async () => {
+  let query: unknown;
+  const service = new FollowUpsService({
+    followUp: {
+      findMany: async (args: unknown) => {
+        query = args;
+        return [];
+      },
+    },
+  } as unknown as PrismaService);
+
+  await service.list({}, bde);
+
+  const conditions = (
+    query as { where: { AND: Array<Record<string, unknown>> } }
+  ).where.AND;
+  assert.deepEqual(
+    conditions.find((condition) => "NOT" in condition),
+    {
+      NOT: {
+        status: FollowUpStatus.PENDING,
+        type: "Proposal Follow-up",
+        nextAction: "Follow up on proposal",
+        lead: {
+          followUps: {
+            some: {
+              status: FollowUpStatus.COMPLETED,
+              type: "Proposal Follow-up",
+              nextAction: "Follow up on proposal",
+            },
+          },
+        },
+      },
+    },
+  );
 });
 
 test("date-only filters cover the selected Asia/Kolkata calendar days", async () => {
@@ -104,7 +141,10 @@ test("date scopes remain intersected with an explicit status filter", async () =
     conditions.some(
       (condition) =>
         "status" in condition &&
-        condition.status === FollowUpStatus.COMPLETED,
+        Array.isArray((condition.status as { in?: unknown }).in) &&
+        (condition.status as { in: FollowUpStatus[] }).in.includes(
+          FollowUpStatus.COMPLETED,
+        ),
     ),
   );
 });
@@ -548,6 +588,113 @@ test("Not Interested completion moves the lead to Lost without follow-up details
   assert.equal(cancelledCallMessages, true);
 });
 
+test("completing a negotiation as Won saves deal, confirmation, and payment details", async () => {
+  let negotiationUpdate: Record<string, unknown> | undefined;
+  let leadUpdate: Record<string, unknown> | undefined;
+  let followUpAction: string | undefined;
+  const existing = {
+    id: "follow-up-1",
+    leadId: "lead-1",
+    negotiationId: "negotiation-1",
+    negotiation: { id: "negotiation-1" },
+    meetingId: null,
+    status: FollowUpStatus.PENDING,
+    dueAt: new Date(),
+    nextAction: "Follow up on negotiation",
+    remarks: null,
+    type: "Negotiation",
+    lead: {
+      stage: LeadStage.NEGOTIATION,
+      followUpAt: new Date(),
+      nextAction: "Follow up on negotiation",
+    },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+    $transaction: async (operation: (tx: unknown) => Promise<unknown>) =>
+      operation({
+        $queryRaw: async () => [],
+        followUp: {
+          updateMany: async (args: {
+            data: Record<string, unknown>;
+          }) => {
+            if (args.data.nextAction) {
+              followUpAction = args.data.nextAction as string;
+            }
+            return { count: 1 };
+          },
+          findUniqueOrThrow: async () => ({ id: existing.id }),
+        },
+        negotiation: {
+          update: async (args: { data: Record<string, unknown> }) => {
+            negotiationUpdate = args.data;
+          },
+        },
+        activity: { create: async () => undefined },
+        lead: {
+          update: async (args: { data: Record<string, unknown> }) => {
+            leadUpdate = args.data;
+            return { id: existing.leadId, stage: args.data.stage };
+          },
+        },
+        callMessage: { updateMany: async () => ({ count: 1 }) },
+      }),
+  } as unknown as PrismaService);
+
+  await service.update(
+    existing.id,
+    {
+      status: FollowUpStatus.COMPLETED,
+      nextStage: LeadStage.WON,
+      nextAction: "Won",
+      negotiatedAmount: 1050,
+      expectedTimeline: "Within 30 days",
+      confirmedAt: "2026-10-21T00:00:00.000Z",
+      paymentStatus: "Advance Amount",
+      advanceAmount: 250,
+    },
+    bde,
+  );
+
+  assert.equal(followUpAction, "Won");
+  assert.equal(negotiationUpdate?.negotiatedAmount, 1050);
+  assert.equal(negotiationUpdate?.nextAction, "Won");
+  assert.equal(negotiationUpdate?.expectedTimeline, "Within 30 days");
+  assert.equal(negotiationUpdate?.paymentStatus, "Advance Amount");
+  assert.equal(negotiationUpdate?.advanceAmount, 250);
+  assert.equal(leadUpdate?.stage, LeadStage.WON);
+  assert.equal(leadUpdate?.finalDealValue, 1050);
+  assert.equal(leadUpdate?.paymentStatus, "Advance Amount");
+  assert.equal(leadUpdate?.advanceAmount, 250);
+  assert.equal(leadUpdate?.confirmedAt instanceof Date, true);
+});
+
+test("requires a lost reason when closing a negotiation as Lost", async () => {
+  const existing = {
+    id: "follow-up-1",
+    status: FollowUpStatus.PENDING,
+    type: "Negotiation",
+    lead: { stage: LeadStage.NEGOTIATION },
+  };
+  const service = new FollowUpsService({
+    followUp: { findFirst: async () => existing },
+  } as unknown as PrismaService);
+
+  await assert.rejects(
+    service.update(
+      existing.id,
+      {
+        status: FollowUpStatus.COMPLETED,
+        nextStage: LeadStage.LOST,
+        nextAction: "Lost",
+        negotiatedAmount: 900,
+      },
+      bde,
+    ),
+    BadRequestException,
+  );
+});
+
 test("completing an interested follow-up with meeting details creates one meeting and linked follow-up", async () => {
   let meetingData: Record<string, unknown> | undefined;
   let meetingActivity: Record<string, unknown> | undefined;
@@ -653,8 +800,9 @@ test("completing an interested follow-up with meeting details creates one meetin
   );
 });
 
-test("proposal follow-up completion saves a proposal and schedules its next follow-up", async () => {
+test("proposal follow-up completion saves a proposal without creating a successor task", async () => {
   let proposalData: Record<string, unknown> | undefined;
+  let linkedProposalId: string | undefined;
   let successor: Record<string, unknown> | undefined;
   let proposalActivity: Record<string, unknown> | undefined;
   const leadUpdates: Record<string, unknown>[] = [];
@@ -681,7 +829,11 @@ test("proposal follow-up completion saves a proposal and schedules its next foll
         followUp: {
           findFirst: async () => null,
           updateMany: async () => ({ count: 1 }),
+          update: async (args: { data: { proposalId: string } }) => {
+            linkedProposalId = args.data.proposalId;
+          },
           create: async (args: { data: Record<string, unknown> }) => {
+            assert.fail("A successor task should not be created.");
             successor = args.data;
           },
           findUniqueOrThrow: async () => ({ id: existing.id }),
@@ -692,6 +844,7 @@ test("proposal follow-up completion saves a proposal and schedules its next foll
           findMany: async () => [],
           create: async (args: { data: Record<string, unknown> }) => {
             proposalData = args.data;
+            return { id: "proposal-1" };
           },
         },
         activity: {
@@ -730,12 +883,8 @@ test("proposal follow-up completion saves a proposal and schedules its next foll
   assert.equal(proposalData?.discount, 5000);
   assert.equal(proposalData?.finalAmount, 120000);
   assert.equal(proposalActivity?.type, "PROPOSAL_SENT");
-  assert.equal(successor?.type, "Proposal Follow-up");
-  assert.equal(successor?.nextAction, "Follow up on proposal");
-  assert.equal(
-    (successor?.dueAt as Date).getTime(),
-    nextFollowUpAt.getTime(),
-  );
+  assert.equal(linkedProposalId, "proposal-1");
+  assert.equal(successor, undefined);
   assert.equal(leadUpdates.at(-1)?.stage, LeadStage.PROPOSAL);
   assert.equal(leadUpdates.at(-1)?.nextAction, "Follow up on proposal");
   assert.equal(

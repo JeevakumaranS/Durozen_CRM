@@ -23,6 +23,10 @@ type Activity = {
   contactType?: string | null;
   customerResponse?: string | null;
   expectedTimeline?: string | null;
+  requirement?: string | null;
+  estimatedBudget?: string | number | null;
+  remarks?: string | null;
+  followUpAt?: string | null;
   createdAt: string;
   user?: { fullName: string } | null;
 };
@@ -41,6 +45,8 @@ type LeadDetails = {
   finalDealValue?: string | number | null;
   wonService?: string | null;
   paymentStatus?: string | null;
+  advanceAmount?: string | number | null;
+  confirmedAt?: string | null;
   expectedStartDate?: string | null;
   wonRemarks?: string | null;
   leadSource: string;
@@ -75,6 +81,9 @@ export function LeadDetail() {
   const [nextAction, setNextAction] = useState("");
   const [followUpAt, setFollowUpAt] = useState("");
   const [busy, setBusy] = useState(false);
+  const [expandedActivityId, setExpandedActivityId] = useState<string | null>(
+    null,
+  );
   const timelineActivities = lead?.activities ?? [];
 
   const load = useCallback(async () => {
@@ -204,31 +213,109 @@ export function LeadDetail() {
               <article className="timeline-item" key={activity.id}>
                 <span className="timeline-marker" />
                 <div className="timeline-entry">
-                  <div className="timeline-entry-head">
-                    <strong>
-                      {activity.type.replaceAll("_", " ")}
-                    </strong>
-                    <time>{dateTime(activity.createdAt)}</time>
-                  </div>
-                  <p>{formatEmbeddedDateTimes(activity.description)}</p>
-                  {activity.outcome && (
-                    <small>Outcome: {activity.outcome}</small>
+                  <button
+                    aria-expanded={expandedActivityId === activity.id}
+                    className="timeline-entry-toggle"
+                    onClick={() =>
+                      setExpandedActivityId((current) =>
+                        current === activity.id ? null : activity.id,
+                      )
+                    }
+                    type="button"
+                  >
+                    <span className="timeline-entry-head">
+                      <strong>{activity.type.replaceAll("_", " ")}</strong>
+                      <time>{dateTime(activity.createdAt)}</time>
+                    </span>
+                    <span className="timeline-entry-description">
+                      {formatEmbeddedDateTimes(activity.description)}
+                    </span>
+                    <span className="timeline-entry-prompt">
+                      {expandedActivityId === activity.id
+                        ? "Hide details"
+                        : "View details"}
+                    </span>
+                  </button>
+                  {expandedActivityId === activity.id && (
+                    <dl className="timeline-event-details">
+                      <div>
+                        <dt>Description</dt>
+                        <dd>{formatEmbeddedDateTimes(activity.description)}</dd>
+                      </div>
+                      {activity.outcome && (
+                        <div>
+                          <dt>Outcome</dt>
+                          <dd>{activity.outcome}</dd>
+                        </div>
+                      )}
+                      {activity.contactDate && (
+                        <div>
+                          <dt>Contact date</dt>
+                          <dd>{leadDate(activity.contactDate)}</dd>
+                        </div>
+                      )}
+                      {activity.contactType && (
+                        <div>
+                          <dt>Contact type</dt>
+                          <dd>{activity.contactType}</dd>
+                        </div>
+                      )}
+                      {activity.customerResponse && (
+                        <div>
+                          <dt>Customer response</dt>
+                          <dd>{activity.customerResponse}</dd>
+                        </div>
+                      )}
+                      {activity.requirement && (
+                        <div>
+                          <dt>Requirement</dt>
+                          <dd>{activity.requirement}</dd>
+                        </div>
+                      )}
+                      {activity.estimatedBudget !== null &&
+                        activity.estimatedBudget !== undefined && (
+                          <div>
+                            <dt>Estimated budget</dt>
+                            <dd>
+                              ₹
+                              {Number(activity.estimatedBudget).toLocaleString(
+                                "en-IN",
+                              )}
+                            </dd>
+                          </div>
+                        )}
+                      {activity.expectedTimeline && (
+                        <div>
+                          <dt>Expected timeline</dt>
+                          <dd>{activity.expectedTimeline}</dd>
+                        </div>
+                      )}
+                      {activity.remarks && (
+                        <div>
+                          <dt>Remarks</dt>
+                          <dd>{activity.remarks}</dd>
+                        </div>
+                      )}
+                      {activity.nextAction && (
+                        <div>
+                          <dt>Next action</dt>
+                          <dd>{activity.nextAction}</dd>
+                        </div>
+                      )}
+                      {activity.followUpAt && (
+                        <div>
+                          <dt>Follow-up</dt>
+                          <dd>{dateTime(activity.followUpAt)}</dd>
+                        </div>
+                      )}
+                      <div>
+                        <dt>Recorded by</dt>
+                        <dd>
+                          {activity.user?.fullName || lead.assignedBde.fullName}
+                        </dd>
+                      </div>
+                    </dl>
                   )}
-                  {activity.contactDate && (
-                    <small>Contact date: {leadDate(activity.contactDate)}</small>
-                  )}
-                  {activity.contactType && (
-                    <small>Contact type: {activity.contactType}</small>
-                  )}
-                  {activity.expectedTimeline && (
-                    <small>Expected timeline: {activity.expectedTimeline}</small>
-                  )}
-                  {activity.nextAction && (
-                    <small>Next: {activity.nextAction}</small>
-                  )}
-                  <small>
-                    By {activity.user?.fullName || lead.assignedBde.fullName}
-                  </small>
                 </div>
               </article>
             ))}
@@ -304,6 +391,20 @@ export function LeadDetail() {
                   <div>
                     <dt>Payment status</dt>
                     <dd>{lead.paymentStatus || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>Advance amount</dt>
+                    <dd>
+                      {lead.advanceAmount == null
+                        ? "—"
+                        : `₹${Number(lead.advanceAmount).toLocaleString("en-IN")}`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Confirmed date</dt>
+                    <dd>
+                      {lead.confirmedAt ? dateTime(lead.confirmedAt) : "—"}
+                    </dd>
                   </div>
                   <div>
                     <dt>Expected start</dt>

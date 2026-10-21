@@ -1,5 +1,5 @@
-import { SalesRecordWorkspace } from "../../../features/sales/sales-record-workspace";
+import { redirect } from "next/navigation";
 
 export default function ProposalsPage() {
-  return <SalesRecordWorkspace kind="proposals" />;
+  redirect("/activities/proposals");
 }

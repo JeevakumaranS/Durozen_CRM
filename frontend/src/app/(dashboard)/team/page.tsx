@@ -31,7 +31,7 @@ type AdminUser = {
 type CreateRole = "BDE" | "SALES_MANAGER";
 const PAGE_SIZE = 10;
 
-export default function AdminTeamPage() {
+export default function TeamPage() {
   const [items, setItems] = useState<TeamUser[]>([]);
   const [managers, setManagers] = useState<
     { id: string; fullName: string }[]
@@ -259,8 +259,8 @@ export default function AdminTeamPage() {
           >
             + Create team account
           </button>
-          <Link className="secondary-action" href="/admin">
-            Admin dashboard
+          <Link className="secondary-action" href="/dashboard">
+            Dashboard
           </Link>
         </div>
       </header>

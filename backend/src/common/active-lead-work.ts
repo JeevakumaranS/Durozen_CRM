@@ -15,7 +15,13 @@ export async function lockLeadActiveWork(
   leadId: string,
 ) {
   await tx.$queryRaw`
-    SELECT pg_advisory_xact_lock(721341::integer, hashtext(${leadId})::integer)
+    WITH lead_work_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock(
+        721341::integer,
+        hashtext(${leadId})::integer
+      )
+    )
+    SELECT 1::integer AS locked FROM lead_work_lock
   `;
 }
 

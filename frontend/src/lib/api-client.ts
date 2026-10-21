@@ -1,6 +1,7 @@
 import { clearAccessToken, getAccessToken } from "./auth";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+export const API_DATA_CHANGED_EVENT = "durozen:data-changed";
 
 export class ApiError extends Error {
   constructor(
@@ -53,6 +54,13 @@ export async function apiClient<T>(path: string, init: RequestInit = {}) {
       window.location.assign("/login");
     }
     throw new ApiError(message || "The request could not be completed.", response.status);
+  }
+  const method = (init.method ?? "GET").toUpperCase();
+  if (
+    typeof window !== "undefined" &&
+    !["GET", "HEAD", "OPTIONS"].includes(method)
+  ) {
+    window.dispatchEvent(new Event(API_DATA_CHANGED_EVENT));
   }
   return response.json() as Promise<T>;
 }

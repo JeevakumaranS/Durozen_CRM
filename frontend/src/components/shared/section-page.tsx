@@ -17,8 +17,7 @@ export function SectionPage({ title, description }: SectionPageProps) {
             ["Dashboard", "/dashboard"],
             ["Leads", "/leads"],
             ["Sales Pipeline", "/pipeline"],
-            ["Tasks", "/tasks"],
-            ["Proposals", "/proposals"],
+            ["Activities", "/activities"],
             ["Customers", "/customers"],
             ["Reports", "/reports"],
           ].map(([label, href]) => (

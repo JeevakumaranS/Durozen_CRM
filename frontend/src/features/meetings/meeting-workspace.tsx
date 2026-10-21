@@ -8,6 +8,7 @@ import { ClockDateTimePicker } from "../../components/shared/clock-date-time-pic
 import { DateRangePicker } from "../../components/shared/date-range-picker";
 import { LOST_REASONS } from "../leads/lost-reasons";
 import {
+  businessDateKey,
   businessDateTimeInputValue,
   businessDateTimeToIso,
   formatBusinessDateTime,
@@ -439,7 +440,7 @@ export function MeetingWorkspace() {
       });
       notify(
         completionNextAction === "Proposal"
-          ? "Meeting completed. Lead remains in Meeting and a Proposal Follow-up task was added."
+          ? "Meeting completed. Lead remains in Meeting and a proposal follow-up was added."
           : "Meeting completed and lead moved to Lost.",
       );
       setCompleting(null);
@@ -593,8 +594,24 @@ export function MeetingWorkspace() {
       ) : (
         <>
           <div className="meeting-grid" aria-live="polite">
-            {visibleMeetings.map((meeting) => (
-              <article className="meeting-card" key={meeting.id}>
+            {visibleMeetings.map((meeting) => {
+              const meetingDayKey = businessDateKey(meeting.meetingAt);
+              const todayKey = businessDateKey(new Date());
+              const urgency =
+                meeting.status === "SCHEDULED" &&
+                meetingDayKey !== "" &&
+                meetingDayKey < todayKey
+                  ? "overdue"
+                  : meeting.status === "SCHEDULED" &&
+                      meetingDayKey !== "" &&
+                      meetingDayKey === todayKey
+                    ? "due-today"
+                    : "";
+              return (
+                <article
+                  className={`meeting-card${urgency ? ` ${urgency}` : ""}`}
+                  key={meeting.id}
+                >
                 <div className="meeting-card-main">
                   <div className="meeting-card-heading">
                     <div className="meeting-card-lead">
@@ -606,9 +623,13 @@ export function MeetingWorkspace() {
                       </p>
                     </div>
                     <span
-                      className={`meeting-status meeting-status-${meeting.status.toLowerCase()}`}
+                      className={`meeting-status meeting-status-${meeting.status.toLowerCase()}${urgency ? ` meeting-status-${urgency}` : ""}`}
                     >
-                      {meeting.status.toLowerCase()}
+                      {urgency === "overdue"
+                        ? "Overdue"
+                        : urgency === "due-today"
+                          ? "Due today"
+                          : meeting.status.toLowerCase()}
                     </span>
                   </div>
                   <div className="meeting-card-time">
@@ -647,6 +668,15 @@ export function MeetingWorkspace() {
                   </dl>
                 </div>
                 <footer className="meeting-card-actions">
+                  {meeting.status === "SCHEDULED" && (
+                    <button
+                      className="meeting-complete"
+                      disabled={busy}
+                      onClick={() => startComplete(meeting)}
+                    >
+                      Complete
+                    </button>
+                  )}
                   <button onClick={() => setViewing(meeting)}>View</button>
                   {meeting.status === "SCHEDULED" && (
                     <>
@@ -660,12 +690,6 @@ export function MeetingWorkspace() {
                         Reschedule
                       </button>
                       <button
-                        disabled={busy}
-                        onClick={() => startComplete(meeting)}
-                      >
-                        Complete
-                      </button>
-                      <button
                         className="meeting-cancel"
                         disabled={busy}
                         onClick={() => void updateStatus(meeting, "cancel")}
@@ -675,8 +699,9 @@ export function MeetingWorkspace() {
                     </>
                   )}
                 </footer>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
           <nav className="meeting-pagination" aria-label="Meetings pagination">
             <span>
@@ -1065,8 +1090,8 @@ export function MeetingWorkspace() {
               )}
               <div className="form-footer">
                 <p>
-                  Choosing Proposal creates a follow-up task in Tasks. Choosing
-                  Lost closes the lead and cancels its pending tasks.
+                  Choosing Proposal creates a follow-up in Activities.
+                  Choosing Lost closes the lead and cancels pending follow-ups.
                 </p>
                 <button className="primary" disabled={busy}>
                   {busy ? "Saving..." : "Complete meeting"}

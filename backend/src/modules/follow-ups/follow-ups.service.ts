@@ -110,6 +110,22 @@ export class FollowUpsService {
     const conditions: Prisma.FollowUpWhereInput[] = [
       { lead: leadScope(user) },
       { type: { in: ["Proposal Follow-up", "Negotiation"] } },
+      {
+        NOT: {
+          status: FollowUpStatus.PENDING,
+          type: "Proposal Follow-up",
+          nextAction: "Follow up on proposal",
+          lead: {
+            followUps: {
+              some: {
+                status: FollowUpStatus.COMPLETED,
+                type: "Proposal Follow-up",
+                nextAction: "Follow up on proposal",
+              },
+            },
+          },
+        },
+      },
     ];
     if (filters.scope === "today") {
       conditions.push({
@@ -183,6 +199,25 @@ export class FollowUpsService {
     return this.prisma.followUp.findMany({
       where: { AND: conditions },
       include: {
+        proposal: {
+          select: {
+            id: true,
+            customerResponse: true,
+            responseSavedAt: true,
+          },
+        },
+        negotiation: {
+          select: {
+            id: true,
+            originalProposalAmount: true,
+            customerExpectedAmount: true,
+            negotiatedAmount: true,
+            expectedTimeline: true,
+            confirmedAt: true,
+            paymentStatus: true,
+            advanceAmount: true,
+          },
+        },
         lead: {
           select: {
             id: true,
@@ -191,11 +226,21 @@ export class FollowUpsService {
             mobileNumber: true,
             stage: true,
             assignedBde: { select: { id: true, fullName: true } },
+            negotiations: {
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                id: true,
+                customerResponse: true,
+                responseSavedAt: true,
+                nextAction: true,
+              },
+            },
             activities: {
               where: { contactType: { not: null } },
               orderBy: { createdAt: "desc" },
               take: 1,
-              select: { contactType: true },
+              select: { contactType: true, customerResponse: true },
             },
           },
         },
@@ -264,7 +309,7 @@ export class FollowUpsService {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     if (!["Proposal Follow-up", "Negotiation"].includes(dto.type)) {
       throw new BadRequestException(
-        "Tasks can only be created for proposals or negotiations.",
+        "Follow-ups can only be created for proposals or negotiations.",
       );
     }
     const lead = await this.prisma.lead.findFirst({
@@ -282,6 +327,14 @@ export class FollowUpsService {
 
     return this.prisma.$transaction(async (tx) => {
       await assertLeadHasNoOtherActiveWork(tx, lead.id);
+      const negotiation =
+        dto.type === "Negotiation"
+          ? await tx.negotiation.findFirst({
+              where: { leadId: lead.id },
+              orderBy: { createdAt: "desc" },
+              select: { id: true },
+            })
+          : null;
       const followUp = await tx.followUp.create({
         data: {
           leadId: lead.id,
@@ -291,6 +344,13 @@ export class FollowUpsService {
           remarks: dto.remarks,
         },
       });
+      if (negotiation) {
+        await tx.$executeRaw`
+          UPDATE "follow_ups"
+          SET "negotiation_id" = ${negotiation.id}::uuid
+          WHERE "id" = ${followUp.id}::uuid
+        `;
+      }
       await tx.lead.update({
         where: { id: lead.id },
         data: { followUpAt: new Date(dto.dueAt), nextAction: dto.nextAction },
@@ -309,7 +369,7 @@ export class FollowUpsService {
         id,
         lead: leadScope(user),
       },
-      include: { lead: true },
+      include: { lead: true, negotiation: true },
     });
     if (!existing) throw new NotFoundException("Follow-up not found");
     if (existing.status !== FollowUpStatus.PENDING) {
@@ -324,6 +384,9 @@ export class FollowUpsService {
     const isProposalCompletion =
       dto.status === FollowUpStatus.COMPLETED &&
       dto.nextStage === LeadStage.PROPOSAL;
+    const isNegotiationCompletion =
+      dto.status === FollowUpStatus.COMPLETED &&
+      existing.type === "Negotiation";
     if (
       isProposalCompletion &&
       (existing.type !== "Proposal Follow-up" ||
@@ -353,7 +416,32 @@ export class FollowUpsService {
       );
     }
     if (
+      isNegotiationCompletion &&
+      dto.nextStage !== LeadStage.WON &&
+      dto.nextStage !== LeadStage.LOST
+    ) {
+      throw new BadRequestException(
+        "Choose Won or Lost to complete a negotiation.",
+      );
+    }
+    if (
+      isNegotiationCompletion &&
+      (dto.negotiatedAmount === undefined ||
+        (dto.nextStage === LeadStage.LOST && !dto.lostReason?.trim()) ||
+        (dto.nextStage === LeadStage.WON &&
+          (!dto.expectedTimeline?.trim() ||
+            !dto.confirmedAt ||
+            !dto.paymentStatus ||
+            (dto.paymentStatus === "Advance Amount" &&
+              (dto.advanceAmount === undefined || dto.advanceAmount <= 0)))))
+    ) {
+      throw new BadRequestException(
+        "Enter the negotiated amount and all details required for the selected outcome.",
+      );
+    }
+    if (
       !isProposalCompletion &&
+      !isNegotiationCompletion &&
       dto.status === FollowUpStatus.COMPLETED &&
       (!dto.contactDate ||
         !dto.contactType ||
@@ -475,6 +563,9 @@ export class FollowUpsService {
                 nextAction: dto.nextAction,
               }
             : {}),
+          ...(isNegotiationCompletion
+            ? { nextAction: dto.nextAction }
+            : {}),
         },
       });
       if (transition.count !== 1) {
@@ -492,7 +583,7 @@ export class FollowUpsService {
         `;
         const proposalNumber = await nextProposalNumber(proposalNumberYear, tx);
         const discount = dto.discount ?? 0;
-        await tx.proposal.create({
+        const proposal = await tx.proposal.create({
           data: {
             leadId: existing.leadId,
             proposalNumber,
@@ -505,12 +596,56 @@ export class FollowUpsService {
             followUpAt: new Date(dto.dueAt!),
           },
         });
+        await tx.followUp.update({
+          where: { id },
+          data: { proposalId: proposal.id },
+        });
         await tx.activity.create({
           data: {
             leadId: existing.leadId,
             userId: user.sub,
             type: "PROPOSAL_SENT",
             description: `Proposal ${proposalNumber} prepared for ${dto.serviceProduct!.trim()}`,
+          },
+        });
+      } else if (isNegotiationCompletion) {
+        if (!existing.negotiation) {
+          throw new BadRequestException(
+            "The negotiation record for this follow-up could not be found.",
+          );
+        }
+        await tx.negotiation.update({
+          where: { id: existing.negotiation.id },
+          data: {
+            negotiatedAmount: dto.negotiatedAmount,
+            nextAction: dto.nextAction!,
+            expectedTimeline:
+              nextStage === LeadStage.WON
+                ? dto.expectedTimeline!.trim()
+                : undefined,
+            confirmedAt:
+              nextStage === LeadStage.WON
+                ? new Date(dto.confirmedAt!)
+                : undefined,
+            paymentStatus:
+              nextStage === LeadStage.WON ? dto.paymentStatus : undefined,
+            advanceAmount:
+              nextStage === LeadStage.WON
+                ? dto.paymentStatus === "Advance Amount"
+                  ? dto.advanceAmount
+                  : null
+                : undefined,
+            remarks:
+              nextStage === LeadStage.LOST ? dto.lostReason!.trim() : undefined,
+          },
+        });
+        await tx.activity.create({
+          data: {
+            leadId: existing.leadId,
+            userId: user.sub,
+            type: "NEGOTIATION",
+            description: `Negotiation completed: ${dto.nextAction}`,
+            outcome: dto.nextAction,
           },
         });
       } else if (dto.status === FollowUpStatus.COMPLETED) {
@@ -574,17 +709,14 @@ export class FollowUpsService {
             nextAction: meetingNextAction,
           },
         });
-      } else if (isProposalCompletion) {
-        await tx.followUp.create({
-          data: {
-            leadId: existing.leadId,
-            dueAt: new Date(dto.dueAt!),
-            type: "Proposal Follow-up",
-            nextAction: "Follow up on proposal",
-          },
-        });
-      } else if (activeLead && closesPending && dto.dueAt && dto.nextAction) {
-        await tx.followUp.create({
+      } else if (
+        !isProposalCompletion &&
+        activeLead &&
+        closesPending &&
+        dto.dueAt &&
+        dto.nextAction
+      ) {
+        const successor = await tx.followUp.create({
           data: {
             leadId: existing.leadId,
             meetingId: existing.meetingId,
@@ -593,6 +725,15 @@ export class FollowUpsService {
             nextAction: dto.nextAction,
           },
         });
+        if (existing.type === "Negotiation") {
+          await tx.$executeRaw`
+            UPDATE "follow_ups" AS successor
+            SET "negotiation_id" = source."negotiation_id"
+            FROM "follow_ups" AS source
+            WHERE successor."id" = ${successor.id}::uuid
+              AND source."id" = ${existing.id}::uuid
+          `;
+        }
         await tx.lead.update({
           where: { id: existing.leadId },
           data: {
@@ -628,16 +769,46 @@ export class FollowUpsService {
               nextStage === LeadStage.LOST
                 ? (dto.lostReason ?? "Not Interested")
                 : undefined,
+            finalDealValue:
+              isNegotiationCompletion && nextStage === LeadStage.WON
+                ? dto.negotiatedAmount
+                : undefined,
+            paymentStatus:
+              isNegotiationCompletion && nextStage === LeadStage.WON
+                ? dto.paymentStatus
+                : undefined,
+            advanceAmount:
+              isNegotiationCompletion && nextStage === LeadStage.WON
+                ? dto.paymentStatus === "Advance Amount"
+                  ? dto.advanceAmount
+                  : null
+                : undefined,
+            confirmedAt:
+              isNegotiationCompletion && nextStage === LeadStage.WON
+                ? new Date(dto.confirmedAt!)
+                : undefined,
             nextAction: isProposalCompletion
               ? "Follow up on proposal"
               : dto.scheduleMeeting
                 ? undefined
-                : null,
+                : !isProposalCompletion &&
+                    activeLead &&
+                    closesPending &&
+                    dto.dueAt &&
+                    dto.nextAction
+                  ? dto.nextAction
+                  : null,
             followUpAt: isProposalCompletion
               ? new Date(dto.dueAt!)
               : dto.scheduleMeeting
                 ? undefined
-                : null,
+                : !isProposalCompletion &&
+                    activeLead &&
+                    closesPending &&
+                    dto.dueAt &&
+                    dto.nextAction
+                  ? new Date(dto.dueAt)
+                  : null,
           },
           select: { id: true, stage: true },
         });
@@ -646,7 +817,7 @@ export class FollowUpsService {
             `Lead stage was not updated to ${nextStage}.`,
           );
         }
-        if (nextStage === LeadStage.LOST) {
+        if (nextStage === LeadStage.WON || nextStage === LeadStage.LOST) {
           await tx.followUp.updateMany({
             where: {
               leadId: existing.leadId,

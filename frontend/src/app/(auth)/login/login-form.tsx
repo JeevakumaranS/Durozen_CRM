@@ -36,7 +36,7 @@ export default function LoginForm() {
     apiClient<AuthUser>("/auth/me")
       .then((user) => {
         setAuthUser(user);
-        router.replace(user.role === "ADMIN" ? "/admin" : "/dashboard");
+        router.replace("/dashboard");
       })
       .catch(() => clearAccessToken());
   }, [router]);
@@ -51,9 +51,7 @@ export default function LoginForm() {
       });
       setAccessToken(result.accessToken);
       setAuthUser(result.user);
-      router.replace(
-        result.user.role === "ADMIN" ? "/admin" : "/dashboard",
-      );
+      router.replace("/dashboard");
     } catch (reason) {
       notify(
         reason instanceof Error ? reason.message : "Unable to sign in.",

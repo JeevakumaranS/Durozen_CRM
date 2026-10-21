@@ -376,7 +376,7 @@ export class MeetingsService {
     }
     if (dto.nextAction === "Proposal" && !dto.followUpAt) {
       throw new BadRequestException(
-        "A next follow-up date is required for the Proposal Follow-up task.",
+        "A next follow-up date is required for the proposal follow-up.",
       );
     }
     if (dto.nextAction === "Lost" && !dto.lostReason?.trim()) {
@@ -463,6 +463,8 @@ export class MeetingsService {
         await tx.lead.update({
           where: { id: existing.leadId },
           data: {
+            stage: LeadStage.MEETING,
+            stageEnteredAt: new Date(),
             requirement: dto.requirement.trim(),
             estimatedBudget: dto.budget,
             remarks: dto.discussionNotes?.trim() || undefined,

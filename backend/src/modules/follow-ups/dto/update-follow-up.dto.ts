@@ -54,6 +54,10 @@ export class UpdateFollowUpDto {
   expectedTimeline?: string;
 
   @IsOptional()
+  @IsDateString()
+  confirmedAt?: string;
+
+  @IsOptional()
   @IsEnum(LeadStage)
   nextStage?: LeadStage;
 
@@ -91,6 +95,20 @@ export class UpdateFollowUpDto {
   @IsNumber()
   @Min(0)
   discount?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  negotiatedAmount?: number;
+
+  @IsOptional()
+  @IsIn(["Advance Amount", "Not Paid", "Fully Paid"])
+  paymentStatus?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  advanceAmount?: number;
 
   @IsOptional()
   @IsIn([

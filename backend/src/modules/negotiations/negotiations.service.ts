@@ -3,13 +3,17 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { LeadStage } from "@prisma/client";
+import { LeadStage, Prisma } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
-import { assertLeadHasNoOtherActiveWork } from "../../common/active-lead-work";
+import {
+  assertLeadHasNoOtherActiveWork,
+  lockLeadActiveWork,
+} from "../../common/active-lead-work";
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateNegotiationDto } from "./dto/create-negotiation.dto";
+import { UpdateNegotiationDto } from "./dto/update-negotiation.dto";
 
 @Injectable()
 export class NegotiationsService {
@@ -70,16 +74,9 @@ export class NegotiationsService {
               user: { connect: { id: user.sub } },
             },
           },
-          followUps: {
-            create: {
-              dueAt: new Date(dto.followUpAt),
-              type: "Negotiation",
-              nextAction: dto.nextAction,
-            },
-          },
         },
       });
-      return tx.negotiation.create({
+      const negotiation = await tx.negotiation.create({
         data: {
           leadId: lead.id,
           originalProposalAmount,
@@ -98,6 +95,131 @@ export class NegotiationsService {
               assignedBde: { select: { fullName: true } },
             },
           },
+        },
+      });
+      const followUp = await tx.followUp.create({
+        data: {
+          leadId: lead.id,
+          dueAt: new Date(dto.followUpAt),
+          type: "Negotiation",
+          nextAction: dto.nextAction,
+        },
+      });
+      await tx.$executeRaw`
+        UPDATE "follow_ups"
+        SET "negotiation_id" = ${negotiation.id}::uuid
+        WHERE "id" = ${followUp.id}::uuid
+      `;
+      return negotiation;
+    });
+  }
+
+  async update(id: string, dto: UpdateNegotiationDto, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const negotiation = await this.prisma.negotiation.findFirst({
+      where: {
+        id,
+        ...(user.role === "ADMIN" ? {} : { lead: leadScope(user) }),
+      },
+      include: { lead: true },
+    });
+    if (!negotiation) throw new NotFoundException("Negotiation not found");
+    if (dto.nextAction && !dto.customerResponse?.trim()) {
+      throw new BadRequestException("A customer response is required.");
+    }
+    if (dto.nextAction && negotiation.responseSavedAt) {
+      throw new BadRequestException(
+        "A response has already been saved for this negotiation.",
+      );
+    }
+    if (dto.nextAction === "Lost" && !dto.lostReason?.trim()) {
+      throw new BadRequestException("A lost reason is required.");
+    }
+
+    const targetStage =
+      dto.nextAction === "Won"
+        ? LeadStage.WON
+        : dto.nextAction === "Lost"
+          ? LeadStage.LOST
+          : undefined;
+    if (targetStage) {
+      this.transitions.assertAllowed(negotiation.lead.stage, targetStage);
+    }
+    const stageChanged =
+      targetStage !== undefined && targetStage !== negotiation.lead.stage;
+
+    return this.prisma.$transaction(async (tx) => {
+      const responseSavedAt = dto.nextAction ? new Date() : undefined;
+      if (responseSavedAt) {
+        const responseUpdate = await tx.negotiation.updateMany({
+          where: { id, responseSavedAt: null },
+          data: {
+            customerResponse: dto.customerResponse!.trim(),
+            responseSavedAt,
+          },
+        });
+        if (responseUpdate.count !== 1) {
+          throw new BadRequestException(
+            "A response has already been saved for this negotiation.",
+          );
+        }
+      }
+
+      if (targetStage) {
+        await lockLeadActiveWork(tx, negotiation.leadId);
+        const leadData: Prisma.LeadUpdateInput = {
+          stage: targetStage,
+          stageEnteredAt: stageChanged ? new Date() : undefined,
+          nextAction: null,
+          followUpAt: null,
+          lostReason:
+            targetStage === LeadStage.LOST ? dto.lostReason!.trim() : undefined,
+          followUps: {
+            updateMany: {
+              where: { status: "PENDING" },
+              data: { status: "CANCELLED" },
+            },
+          },
+          callMessages: {
+            updateMany: {
+              where: { status: "PENDING" },
+              data: { status: "CANCELLED" },
+            },
+          },
+        };
+
+        if (targetStage === LeadStage.WON) {
+          const latestProposal = await tx.proposal.findFirst({
+            where: { leadId: negotiation.leadId },
+            orderBy: { proposalDate: "desc" },
+            select: { finalAmount: true, serviceProduct: true },
+          });
+          const finalDealValue =
+            negotiation.negotiatedAmount ??
+            negotiation.originalProposalAmount ??
+            latestProposal?.finalAmount;
+          if (finalDealValue === undefined || finalDealValue === null) {
+            throw new BadRequestException(
+              "A negotiated or original proposal amount is required to mark this lead Won.",
+            );
+          }
+          leadData.finalDealValue = finalDealValue;
+          leadData.wonService = latestProposal?.serviceProduct;
+        }
+
+        await tx.lead.update({
+          where: { id: negotiation.leadId },
+          data: leadData,
+        });
+      }
+
+      return tx.negotiation.update({
+        where: { id },
+        data: {
+          customerResponse: dto.customerResponse?.trim(),
+          responseSavedAt,
+          nextAction: dto.nextAction,
+          remarks: dto.remarks,
         },
       });
     });

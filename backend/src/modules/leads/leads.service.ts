@@ -128,6 +128,7 @@ export class LeadsService {
           description: dto.description,
           outcome: dto.outcome,
           nextAction: dto.nextAction,
+          followUpAt: new Date(dto.followUpAt),
         },
         include: { user: { select: { fullName: true } } },
       });
@@ -478,6 +479,17 @@ export class LeadsService {
                   contactType: dto.contactType,
                   customerResponse: dto.customerResponse,
                   expectedTimeline: dto.expectedTimeline,
+                  requirement: dto.requirement,
+                  estimatedBudget:
+                    dto.estimatedBudget === undefined ||
+                    dto.estimatedBudget === null
+                      ? undefined
+                      : new Prisma.Decimal(dto.estimatedBudget),
+                  remarks: dto.remarks,
+                  nextAction: dto.nextAction,
+                  followUpAt: dto.followUpAt
+                    ? new Date(dto.followUpAt)
+                    : undefined,
                   user: { connect: { id: user.sub } },
                 },
               ],

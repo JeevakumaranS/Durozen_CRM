@@ -1,5 +1,5 @@
-import { MeetingWorkspace } from "../../../features/meetings/meeting-workspace";
+import { redirect } from "next/navigation";
 
 export default function MeetingsPage() {
-  return <MeetingWorkspace />;
+  redirect("/activities/meetings");
 }

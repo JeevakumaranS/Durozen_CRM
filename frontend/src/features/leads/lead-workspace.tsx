@@ -2193,7 +2193,7 @@ export function LeadWorkspace({
                   {canAssignLeads && isAdmin ? (
                     <>
                       {" "}
-                      <Link href="/admin">Add or activate a BDE</Link> first.
+                      <Link href="/team">Add or activate a BDE</Link> first.
                     </>
                   ) : (
                     " Ask an administrator to add or activate a BDE."
@@ -2447,7 +2447,9 @@ export function LeadWorkspace({
                             {form.nextAction}
                           </option>
                         )}
-                      {CONTACT_TYPES.map((contactType) => (
+                      {CONTACT_TYPES.filter(
+                        (contactType) => contactType !== "Other",
+                      ).map((contactType) => (
                         <option key={contactType} value={contactType}>
                           {contactType}
                         </option>

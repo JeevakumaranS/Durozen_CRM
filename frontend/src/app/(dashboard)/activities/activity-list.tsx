@@ -8,6 +8,7 @@ import { ClockDateTimePicker } from "../../../components/shared/clock-date-time-
 import { DateRangePicker } from "../../../components/shared/date-range-picker";
 import { LOST_REASONS } from "../../../features/leads/lost-reasons";
 import {
+  businessDateKey,
   businessDateTimeInputValue,
   businessDateTimeToIso,
   formatBusinessDateTime,
@@ -146,16 +147,24 @@ export function ActivitiesPage({
       apiClient<CallTask[]>(`/calls-messages?${params}`),
       apiClient<ContactLead[]>("/leads"),
     ])
-      .then(([tasks, leads]) => {
+      .then(([scheduledCalls, leads]) => {
         if (!current) return;
         setCallTasks(
-          tasks.filter((task) =>
-            ["phone call", "call", "whatsapp", "email"].includes(
-              task.contactMethod.trim().toLowerCase(),
-            ) &&
-            (!callStatusFilters.length ||
-              callStatusFilters.includes(task.status)),
-          ),
+          scheduledCalls
+            .filter((task) =>
+              ["phone call", "call", "whatsapp", "email"].includes(
+                task.contactMethod.trim().toLowerCase(),
+              ) &&
+                (!callStatusFilters.length ||
+                  callStatusFilters.includes(task.status)),
+            )
+            .sort(
+              (first, second) =>
+                Number(first.status !== "PENDING") -
+                  Number(second.status !== "PENDING") ||
+                new Date(first.dueAt).getTime() -
+                  new Date(second.dueAt).getTime(),
+            ),
         );
         setContactLeads(
           leads.filter((lead) =>
@@ -168,7 +177,7 @@ export function ActivitiesPage({
         const message =
           reason instanceof Error
             ? reason.message
-            : "Unable to load call and message tasks and leads.";
+            : "Unable to load scheduled calls, messages, and leads.";
         notify(message, "error");
       })
       .finally(() => {
@@ -540,10 +549,10 @@ export function ActivitiesPage({
               </aside>
             <div className="calls-filter-results">
           {callTasksLoading ? (
-            <div className="empty-list" role="status">Loading call tasks...</div>
+            <div className="empty-list" role="status">Loading scheduled calls...</div>
           ) : visibleCallTasks.length === 0 ? (
             <div className="empty-list">
-              No call or message tasks match these filters.
+              No scheduled calls or messages match these filters.
             </div>
           ) : (
             <div className="lead-table-wrap calls-lead-table-wrap">
@@ -560,10 +569,23 @@ export function ActivitiesPage({
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleCallTasks.map((task, index) => (
+                  {visibleCallTasks.map((task, index) => {
+                    const taskDayKey = businessDateKey(task.dueAt);
+                    const todayKey = businessDateKey(new Date());
+                    const urgency =
+                      task.status === "PENDING" &&
+                      taskDayKey !== "" &&
+                      taskDayKey < todayKey
+                        ? "overdue"
+                        : task.status === "PENDING" &&
+                            taskDayKey !== "" &&
+                            taskDayKey === todayKey
+                          ? "due-today"
+                          : "";
+                    return (
                     <Fragment key={task.id}>
                       <tr
-                        className={`calls-lead-table-row${index % 2 ? " is-striped" : ""}`}
+                        className={`calls-lead-table-row${index % 2 ? " is-striped" : ""}${urgency ? ` ${urgency}` : ""}`}
                       >
                         <td>
                           <button
@@ -584,7 +606,15 @@ export function ActivitiesPage({
                         <td>
                           {task.contactMethod}
                           {task.status === "PENDING" && (
-                            <span className="calls-pending-label">Pending</span>
+                            <span
+                              className={`calls-pending-label${urgency ? ` ${urgency}` : ""}`}
+                            >
+                              {urgency === "overdue"
+                                ? "Overdue"
+                                : urgency === "due-today"
+                                  ? "Due today"
+                                  : "Pending"}
+                            </span>
                           )}
                         </td>
                         <td>
@@ -620,7 +650,7 @@ export function ActivitiesPage({
                               </button>
                             </>
                           ) : (
-                            <span className="calls-completed-label">Logged</span>
+                            <span className="calls-completed-label">Completed</span>
                           )}
                         </td>
                       </tr>
@@ -644,7 +674,8 @@ export function ActivitiesPage({
                         </tr>
                       )}
                     </Fragment>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -975,7 +1006,7 @@ export function ActivitiesPage({
               <div className="form-footer">
                 <p>
                   {callDialog === "schedule"
-                    ? "Scheduled calls appear in Tasks until completed."
+                    ? "Scheduled calls remain here until completed."
                     : callDialog === "complete"
                       ? "Completed calls are retained in Logs."
                       : callDialog === "reschedule"

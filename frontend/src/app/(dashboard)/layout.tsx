@@ -3,12 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { apiClient, logoutAndRedirect } from "../../lib/api-client";
+import {
+  API_DATA_CHANGED_EVENT,
+  apiClient,
+  logoutAndRedirect,
+} from "../../lib/api-client";
 import { AuthUser, getAccessToken, setAuthUser } from "../../lib/auth";
 import { notify } from "../../lib/notifications";
 
 type PendingCounts = {
-  tasks: number;
   meetings: number;
   callsAndMessages: number;
 };
@@ -18,7 +21,6 @@ function pendingCountFor(
   counts: PendingCounts | null,
 ): number | undefined {
   if (!counts) return undefined;
-  if (label === "Tasks") return counts.tasks;
   if (label === "Meetings") return counts.meetings;
   if (label === "Calls & Msg") return counts.callsAndMessages;
   return undefined;
@@ -29,20 +31,15 @@ const adminNavigation = [
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["Proposals", "/proposals"],
-  ["Negotiations", "/negotiations"],
   ["Customers", "/customers"],
   ["Reports", "/reports"],
-  ["Admin dashboard", "/admin"],
 ];
 
 const bdeRoutes = [
   "/dashboard",
   "/leads",
   "/pipeline",
-  "/tasks",
   "/activities",
-  "/meetings",
   "/proposals",
   "/customers",
   "/performance",
@@ -52,7 +49,7 @@ const managerRoutes = [
   "/dashboard",
   "/leads",
   "/pipeline",
-  "/tasks",
+  "/activities",
   "/proposals",
   "/performance",
   "/reports",
@@ -61,8 +58,7 @@ const managerNavigation = [
   ["Dashboard", "/dashboard"],
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
-  ["Tasks", "/tasks"],
-  ["Proposals", "/proposals"],
+  ["Activities", "/activities"],
   ["Reports", "/reports"],
 ];
 const bdeNavigation = [
@@ -70,7 +66,6 @@ const bdeNavigation = [
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["Proposals", "/proposals"],
   ["Customers", "/customers"],
   ["Reports", "/reports"],
 ];
@@ -81,10 +76,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isActivitySection =
-    pathname.startsWith("/activities") ||
-    pathname === "/tasks" ||
-    pathname === "/meetings";
+  const isActivitySection = pathname.startsWith("/activities");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [activitiesExpanded, setActivitiesExpanded] =
     useState(isActivitySection);
@@ -116,10 +108,12 @@ export default function DashboardLayout({
     loadPendingCounts();
     const interval = window.setInterval(loadPendingCounts, 60_000);
     window.addEventListener("focus", loadPendingCounts);
+    window.addEventListener(API_DATA_CHANGED_EVENT, loadPendingCounts);
     return () => {
       active = false;
       window.clearInterval(interval);
       window.removeEventListener("focus", loadPendingCounts);
+      window.removeEventListener(API_DATA_CHANGED_EVENT, loadPendingCounts);
     };
   }, [user, pathname]);
 
@@ -147,9 +141,7 @@ export default function DashboardLayout({
               pathname === route || pathname.startsWith(`${route}/`),
           );
         if (!permitted) {
-          window.location.replace(
-            currentUser.role === "ADMIN" ? "/admin" : "/dashboard",
-          );
+          window.location.replace("/dashboard");
           return;
         }
         setLoading(false);
@@ -186,11 +178,18 @@ export default function DashboardLayout({
         <nav aria-label="Main navigation">
           {navigationForRole.map(([label, href]) => {
               if (label === "Activities") {
-                const activityLinks = [
-                  ["Tasks", "/tasks"],
-                  ["Meetings", "/meetings"],
-                  ["Calls & Msg", "/activities/calls"],
-                ];
+                const activityLinks =
+                  user.role === "SALES_MANAGER"
+                    ? [
+                        ["Proposals", "/activities/proposals"],
+                        ["Negotiations", "/activities/negotiations"],
+                      ]
+                    : [
+                        ["Calls & Msg", "/activities/calls"],
+                        ["Meetings", "/activities/meetings"],
+                        ["Proposals", "/activities/proposals"],
+                        ["Negotiations", "/activities/negotiations"],
+                      ];
                 return (
                   <div className="sidebar-activity-group" key={href}>
                     <button
@@ -220,11 +219,11 @@ export default function DashboardLayout({
                             pendingCounts,
                           );
                           const iconPath =
-                            childLabel === "Tasks"
-                              ? "M4 3.5h12v13H4z M7 7h.01 M9 7h4 M7 10h.01 M9 10h4 M7 13h.01 M9 13h4"
-                              : childLabel === "Meetings"
-                                ? "M3.5 5.5h13v11h-13z M6.5 3.5v4 M13.5 3.5v4 M3.5 8.5h13"
-                                : "M6.2 3.8 8.4 6l-1.5 2.1a12 12 0 0 0 5 5l2.1-1.5 2.2 2.2-1.3 2.7c-.3.6-1 .9-1.7.8A14.5 14.5 0 0 1 2.7 4.8c-.1-.7.2-1.4.8-1.7z";
+                            childLabel === "Meetings"
+                              ? "M3.5 5.5h13v11h-13z M6.5 3.5v4 M13.5 3.5v4 M3.5 8.5h13"
+                              : childLabel === "Calls & Msg"
+                                ? "M6.2 3.8 8.4 6l-1.5 2.1a12 12 0 0 0 5 5l2.1-1.5 2.2 2.2-1.3 2.7c-.3.6-1 .9-1.7.8A14.5 14.5 0 0 1 2.7 4.8c-.1-.7.2-1.4.8-1.7z"
+                                : "M4 3.5h12v13H4z M7 7h6 M7 10h6 M7 13h4";
                           return (
                             <Link
                               aria-current={childSelected ? "page" : undefined}
@@ -278,6 +277,26 @@ export default function DashboardLayout({
                 </Link>
               );
             })}
+          {user.role === "ADMIN" && (
+            <div className="sidebar-nav-section">
+              <Link
+                aria-current={
+                  pathname === "/team" || pathname.startsWith("/team/")
+                    ? "page"
+                    : undefined
+                }
+                className={
+                  pathname === "/team" || pathname.startsWith("/team/")
+                    ? "selected"
+                    : ""
+                }
+                href="/team"
+                title="Manage Team"
+              >
+                Manage Team
+              </Link>
+            </div>
+          )}
         </nav>
         <button
           className="dashboard-user"

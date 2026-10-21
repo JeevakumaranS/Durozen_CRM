@@ -1,5 +1,22 @@
 export const BUSINESS_TIME_ZONE = "Asia/Kolkata";
 
+export function businessDateKey(value: Date | string) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en", {
+      timeZone: BUSINESS_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(date)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 export function businessDateTimeInputValue(value?: string | Date | null) {
   if (!value) return "";
   const date = value instanceof Date ? value : new Date(value);

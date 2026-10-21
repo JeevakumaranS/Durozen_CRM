@@ -744,6 +744,21 @@ td {
 .timeline-entry {
   padding-bottom: 16px;
 }
+.timeline-entry-toggle {
+  display: block;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.timeline-entry-toggle:focus-visible {
+  outline: 2px solid #34858a;
+  outline-offset: 3px;
+}
 .timeline-entry-head {
   display: flex;
   justify-content: space-between;
@@ -754,19 +769,47 @@ td {
   font-size: 12px;
 }
 .timeline-entry-head time,
-.timeline-entry small {
+.timeline-entry-prompt {
   color: #879497;
   font-size: 10px;
 }
-.timeline-entry p {
+.timeline-entry-description {
+  display: block;
   margin: 6px 0;
   color: #566a6f;
   font-size: 11px;
   line-height: 1.5;
 }
-.timeline-entry small {
+.timeline-entry-prompt {
   display: block;
-  margin-top: 4px;
+  margin-top: 7px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.timeline-event-details {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 11px 12px;
+  border: 1px solid #edf0ef;
+  border-radius: 5px;
+  background: #f9fbfa;
+}
+.timeline-event-details > div {
+  display: grid;
+  grid-template-columns: minmax(95px, 0.7fr) 1.3fr;
+  gap: 12px;
+}
+.timeline-event-details dt {
+  color: #859194;
+  font-size: 10px;
+}
+.timeline-event-details dd {
+  margin: 0;
+  color: #42585e;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .detail-aside {
   display: grid;
@@ -1913,6 +1956,10 @@ td {
   text-decoration: none;
   font-size: 12px;
   font-weight: 600;
+}
+.sidebar-nav-section {
+  display: grid;
+  gap: 5px;
 }
 .sidebar-activity-group {
   min-width: 0;
@@ -3067,6 +3114,15 @@ button:focus-visible {
   display: grid;
   gap: 11px;
 }
+.sales-record-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.sales-record-search .search-field {
+  flex: 1;
+}
 .sales-record {
   background: white;
   border: 1px solid var(--line);
@@ -3133,7 +3189,8 @@ button:focus-visible {
   grid-column: span 2;
   font-weight: 700;
 }
-.record-response input {
+.record-response input,
+.record-response select {
   border: 1px solid #dce4e4;
   border-radius: 4px;
   padding: 8px;
@@ -3635,6 +3692,18 @@ button:focus-visible {
 .calls-lead-table tbody tr.calls-lead-table-row:hover td {
   background: #f1f7f6;
 }
+.calls-lead-table tbody tr.calls-lead-table-row.overdue td {
+  background: #fffaf9;
+}
+.calls-lead-table tbody tr.calls-lead-table-row.due-today td {
+  background: #fffdf7;
+}
+.calls-lead-table tbody tr.calls-lead-table-row.overdue td:first-child {
+  border-left: 3px solid #c85b51;
+}
+.calls-lead-table tbody tr.calls-lead-table-row.due-today td:first-child {
+  border-left: 3px solid #d5a044;
+}
 .calls-follow-up-date {
   white-space: nowrap;
 }
@@ -3655,6 +3724,14 @@ button:focus-visible {
   font-size: 9px;
   font-weight: 700;
   text-transform: capitalize;
+}
+.calls-pending-label.overdue {
+  background: #fae9e7;
+  color: #a84d44;
+}
+.calls-pending-label.due-today {
+  background: #fff0d8;
+  color: #936318;
 }
 .calls-table-expand {
   border: 0;
@@ -4276,6 +4353,14 @@ td {
   background: #fff;
   box-shadow: 0 3px 12px #244e550a;
 }
+.meeting-card.overdue {
+  border-left: 3px solid #c85b51;
+  background: #fffaf9;
+}
+.meeting-card.due-today {
+  border-left: 3px solid #d5a044;
+  background: #fffdf7;
+}
 .meeting-card-main {
   min-width: 0;
 }
@@ -4327,6 +4412,14 @@ td {
 .meeting-status-scheduled {
   background: #d5a044;
   color: #3b2b12;
+}
+.meeting-status-overdue {
+  background: #fae9e7;
+  color: #a84d44;
+}
+.meeting-status-due-today {
+  background: #fff0d8;
+  color: #936318;
 }
 .meeting-status-completed {
   background: #e6f3eb;
@@ -4410,6 +4503,15 @@ td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.meeting-card-actions .meeting-complete {
+  border-color: #235e68;
+  background: #235e68;
+  color: #fff;
+}
+.meeting-card-actions .meeting-complete:hover:not(:disabled) {
+  border-color: #194951;
+  background: #194951;
 }
 .meeting-card-actions button:disabled,
 .meeting-pagination button:disabled {

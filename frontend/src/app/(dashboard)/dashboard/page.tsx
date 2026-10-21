@@ -179,8 +179,8 @@ export default function Dashboard() {
                     <h2>Follow-up attention</h2>
                     <p>Work due today and past due</p>
                   </div>
-                  <Link className="text-btn" href="/tasks">
-                    Open tasks →
+                  <Link className="text-btn" href="/activities">
+                    Open activities →
                   </Link>
                 </div>
                 <div className="attention-count">

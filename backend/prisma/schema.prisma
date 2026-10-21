@@ -77,6 +77,8 @@ model Lead {
  finalDealValue Decimal? @map("final_deal_value")
  wonService String? @map("won_service")
  paymentStatus String? @map("payment_status")
+ advanceAmount Decimal? @map("advance_amount")
+ confirmedAt DateTime? @map("confirmed_at")
  expectedStartDate DateTime? @map("expected_start_date")
  wonRemarks String? @map("won_remarks")
  lostReason String? @map("lost_reason")
@@ -114,6 +116,10 @@ model Activity {
  contactType String? @map("contact_type")
  customerResponse String? @map("customer_response")
  expectedTimeline String? @map("expected_timeline")
+ requirement String?
+ estimatedBudget Decimal? @map("estimated_budget")
+ remarks String?
+ followUpAt DateTime? @map("follow_up_at")
  createdAt DateTime @default(now()) @map("created_at")
  @@index([leadId, createdAt])
  @@index([meetingId, createdAt])
@@ -141,6 +147,10 @@ model FollowUp {
  id String @id @default(uuid(7)) @db.Uuid
  leadId String @map("lead_id") @db.Uuid
  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+ proposalId String? @map("proposal_id") @db.Uuid
+ proposal Proposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+ negotiationId String? @map("negotiation_id") @db.Uuid
+ negotiation Negotiation? @relation(fields: [negotiationId], references: [id], onDelete: SetNull)
  meetingId String? @map("meeting_id") @db.Uuid
  meeting Meeting? @relation(fields: [meetingId], references: [id], onDelete: SetNull)
  dueAt DateTime @map("due_at")
@@ -151,6 +161,8 @@ model FollowUp {
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
  @@index([status, dueAt])
+ @@index([proposalId])
+ @@index([negotiationId])
  @@index([meetingId, status])
  @@map("follow_ups")
 }
@@ -168,10 +180,12 @@ model Proposal {
  validityUntil DateTime? @map("validity_until")
  sentAt DateTime? @map("sent_at")
  customerResponse String? @map("customer_response")
+ responseSavedAt DateTime? @map("response_saved_at")
  followUpAt DateTime? @map("follow_up_at")
  remarks String?
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
+ followUps FollowUp[]
  @@index([leadId, proposalDate])
  @@map("proposals")
 }
@@ -207,11 +221,18 @@ model Negotiation {
  negotiatedAmount Decimal? @map("negotiated_amount")
  customerConcern String? @map("customer_concern")
  competitorInformation String? @map("competitor_information")
+ customerResponse String? @map("customer_response")
+ responseSavedAt DateTime? @map("response_saved_at")
+ expectedTimeline String? @map("expected_timeline")
+ confirmedAt DateTime? @map("confirmed_at")
+ paymentStatus String? @map("payment_status")
+ advanceAmount Decimal? @map("advance_amount")
  nextAction String @map("next_action")
  followUpAt DateTime @map("follow_up_at")
  remarks String?
  createdAt DateTime @default(now()) @map("created_at")
  updatedAt DateTime @updatedAt @map("updated_at")
+ followUps FollowUp[]
  @@index([leadId, createdAt])
  @@map("negotiations")
 }
