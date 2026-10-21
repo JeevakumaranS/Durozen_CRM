@@ -19,10 +19,12 @@ export class ReportsController {
   @Get("monthly-summary")
   @Roles("ADMIN", "BDE", "SALES_MANAGER")
   monthlySummary(
-    @Query("month") month: string,
+    @Query("month") month: string | undefined,
+    @Query("from") from: string | undefined,
+    @Query("to") to: string | undefined,
     @CurrentUser() user: { sub: string; role: string },
   ) {
-    return this.reports.monthlySummary(month, user);
+    return this.reports.monthlySummary(month, user, from, to);
   }
 
   @Get(":type")

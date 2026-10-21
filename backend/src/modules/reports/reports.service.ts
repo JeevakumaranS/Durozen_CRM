@@ -115,7 +115,7 @@ export class ReportsService {
         const month =
           from?.slice(0, 7) ??
           `${currentMonth.year}-${String(currentMonth.month).padStart(2, "0")}`;
-        return [await this.monthlySummary(month, user)];
+        return [await this.monthlySummary(month, user, from, to)];
       }
       case "leads":
         return this.prisma.lead.findMany({
@@ -383,15 +383,36 @@ export class ReportsService {
     }
   }
 
-  async monthlySummary(month: string, user: Actor) {
+  async monthlySummary(
+    month: string | undefined,
+    user: Actor,
+    from?: string,
+    to?: string,
+  ) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
-    if (!/^\d{4}-\d{2}$/.test(month))
-      throw new BadRequestException("Month must use YYYY-MM format");
-    const [year, monthIndex] = month.split("-").map(Number);
-    if (monthIndex < 1 || monthIndex > 12)
-      throw new BadRequestException("Month must use YYYY-MM format");
-    const start = businessDateTime(year, monthIndex, 1);
-    const end = businessDateTime(year, monthIndex + 1, 1);
+    let period = month;
+    let start: Date;
+    let end: Date;
+    if (from || to) {
+      const range = this.range(from, to);
+      if (!range) throw new BadRequestException("Invalid report date range");
+      start = range.gte;
+      end = range.lt;
+      period = `${from || "Any"} to ${to || "Any"}`;
+    } else {
+      const currentMonth = businessDateParts(new Date());
+      const selectedMonth =
+        month ??
+        `${currentMonth.year}-${String(currentMonth.month).padStart(2, "0")}`;
+      if (!/^\d{4}-\d{2}$/.test(selectedMonth))
+        throw new BadRequestException("Month must use YYYY-MM format");
+      const [year, monthIndex] = selectedMonth.split("-").map(Number);
+      if (monthIndex < 1 || monthIndex > 12)
+        throw new BadRequestException("Month must use YYYY-MM format");
+      start = businessDateTime(year, monthIndex, 1);
+      end = businessDateTime(year, monthIndex + 1, 1);
+      period = selectedMonth;
+    }
     const scope = leadScope(user);
     const activityWhere: Prisma.ActivityWhereInput = {
       createdAt: { gte: start, lt: end },
@@ -472,7 +493,7 @@ export class ReportsService {
     }
     const totalWon = won;
     return {
-      month,
+      month: period,
       totalLeads: leads,
       contacted: reached.get(LeadStage.CONTACTED)?.size ?? 0,
       interested: reached.get(LeadStage.INTERESTED)?.size ?? 0,

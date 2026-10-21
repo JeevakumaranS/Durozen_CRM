@@ -1,11 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { apiClient } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { getAccessToken, getAuthUser } from "../../lib/auth";
+import {
+  ReportChart,
+  ReportChartSelector,
+  type ReportChartType,
+} from "./report-visualization";
 
 type MonthlySummary = {
   month: string;
@@ -103,7 +108,8 @@ const reportTypes = [
   {
     slug: "sales-performance",
     title: "Sales Performance",
-    description: "Monthly sales activity, conversion, and revenue summary.",
+    description:
+      "Sales activity, conversion, and revenue summary for the selected period.",
     apiType: "monthly-summary",
   },
   {
@@ -296,7 +302,7 @@ const reportColumns: Record<string, ReportColumn[]> = {
     { key: "finalDealValue", label: "Deal Value", format: "money" },
   ],
   "monthly-summary": [
-    { key: "month", label: "Month" },
+    { key: "month", label: "Period" },
     { key: "totalLeads", label: "Total Leads", format: "number" },
     { key: "contacted", label: "Contacted Leads", format: "number" },
     { key: "interested", label: "Interested Leads", format: "number" },
@@ -319,6 +325,22 @@ const money = (value: string | number) =>
 const localDate = (date: Date) => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return local.toISOString().slice(0, 10);
+};
+const oneMonthBefore = (value: string) => {
+  const [year, month, day] = value.split("-").map(Number);
+  const targetMonth = new Date(year, month - 2, 1);
+  const lastDay = new Date(
+    targetMonth.getFullYear(),
+    targetMonth.getMonth() + 1,
+    0,
+  ).getDate();
+  return localDate(
+    new Date(
+      targetMonth.getFullYear(),
+      targetMonth.getMonth(),
+      Math.min(day, lastDay),
+    ),
+  );
 };
 
 function reportValue(row: ReportRow, key: string): unknown {
@@ -598,6 +620,7 @@ export function PerformanceWorkspace() {
 }
 
 export function ReportsWorkspace() {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [lastAccessed, setLastAccessed] = useState<Record<string, string>>({});
@@ -670,10 +693,20 @@ export function ReportsWorkspace() {
           </thead>
           <tbody>
             {visibleReports.map((report) => (
-              <tr key={report.slug}>
-                <td>
-                  <Link href={`/reports/${report.slug}`}>{report.title}</Link>
-                </td>
+              <tr
+                aria-label={`Open ${report.title}`}
+                key={report.slug}
+                onClick={() => router.push(`/reports/${report.slug}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    router.push(`/reports/${report.slug}`);
+                  }
+                }}
+                role="link"
+                tabIndex={0}
+              >
+                <td>{report.title}</td>
                 <td title={report.description}>{report.description}</td>
                 <td>
                   {formatReportAccessTime(lastAccessed[report.slug], currentTime)}
@@ -702,9 +735,10 @@ export function ReportsWorkspace() {
 export function ReportDetailWorkspace() {
   const params = useParams<{ type: string }>();
   const report = reportTypes.find(({ slug }) => slug === params.type);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [from, setFrom] = useState(() => {
+    return oneMonthBefore(localDate(new Date()));
+  });
+  const [to, setTo] = useState(() => localDate(new Date()));
   const [stage, setStage] = useState("");
   const [followUpCategory, setFollowUpCategory] = useState("");
   const [followUpStatus, setFollowUpStatus] = useState("");
@@ -717,6 +751,11 @@ export function ReportDetailWorkspace() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [chartType, setChartType] = useState<ReportChartType>("table");
+  const [exportFormat, setExportFormat] = useState<"pdf" | "xlsx" | "print">(
+    "pdf",
+  );
   const user = getAuthUser();
   const restricted =
     user?.role === "BDE" &&
@@ -726,6 +765,10 @@ export function ReportDetailWorkspace() {
       "sales-performance",
       "follow-up-report",
     ].includes(report.slug);
+
+  useEffect(() => {
+    setChartType("table");
+  }, [report?.apiType]);
 
   useEffect(() => {
     if (!report || restricted) return;
@@ -757,8 +800,7 @@ export function ReportDetailWorkspace() {
       ...(followUpStatus && report?.apiType === "follow-ups"
         ? { status: followUpStatus }
         : {}),
-      ...(lostReason &&
-      ["won-lost", "lost-leads"].includes(report?.apiType ?? "")
+      ...(lostReason && report?.apiType === "lost-leads"
         ? { lostReason }
         : {}),
     }),
@@ -777,7 +819,7 @@ export function ReportDetailWorkspace() {
 
   useEffect(() => {
     setPage(1);
-  }, [filters, month, report]);
+  }, [filters, report]);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const visibleRows = rows.slice((page - 1) * pageSize, page * pageSize);
@@ -829,7 +871,7 @@ export function ReportDetailWorkspace() {
       try {
         if (activeReport.slug === "sales-performance") {
           const summary = await apiClient<MonthlySummary>(
-            `/reports/monthly-summary?month=${month}`,
+            `/reports/monthly-summary?${new URLSearchParams(filters)}`,
           );
           if (!cancelled) setRows([{ ...summary }]);
         } else {
@@ -861,24 +903,22 @@ export function ReportDetailWorkspace() {
     };
   }, [
     filters,
-    month,
     report,
     restricted,
   ]);
 
-  async function exportFile(format: "pdf" | "xlsx") {
+  async function exportFile() {
     if (!report) return;
+    if (exportFormat === "print") {
+      setExportDialogOpen(false);
+      window.print();
+      return;
+    }
     setBusy(true);
     setError("");
-    let exportFilters = filters;
-    if (report.slug === "sales-performance") {
-      const monthEnd = new Date(`${month}-01T00:00:00`);
-      monthEnd.setMonth(monthEnd.getMonth() + 1);
-      monthEnd.setDate(0);
-      exportFilters = { from: `${month}-01`, to: localDate(monthEnd) };
-    }
     try {
-      await downloadReport(report.apiType, format, exportFilters);
+      await downloadReport(report.apiType, exportFormat, filters);
+      setExportDialogOpen(false);
     } catch (reason) {
       const message =
         reason instanceof Error ? reason.message : "Unable to export report.";
@@ -953,8 +993,8 @@ export function ReportDetailWorkspace() {
           <h1>{report.title}</h1>
           <p className="subtitle">{report.description}</p>
           <p className="report-print-meta">
-            {report.slug === "sales-performance"
-              ? `Month: ${month}`
+            {report.slug === "sales-performance" && !from && !to
+              ? "Period: Current month"
               : `Date range: ${from || "Any"} to ${to || "Any"}`}
             {assignedBdeId
               ? ` · BDE: ${bdeOptions.find((option) => option.id === assignedBdeId)?.fullName ?? assignedBdeId}`
@@ -964,38 +1004,11 @@ export function ReportDetailWorkspace() {
               ? ` · Follow-up: ${followUpCategory}`
               : ""}
             {followUpStatus ? ` · Status: ${followUpStatus}` : ""}
-            {lostReason ? ` · Lost reason: ${lostReason}` : ""}
+            {report.apiType === "lost-leads" && lostReason
+              ? ` · Lost reason: ${lostReason}`
+              : ""}
           </p>
         </div>
-        {report.slug === "sales-performance" ? (
-          <label className="period-control">
-            Month
-            <input
-              type="month"
-              value={month}
-              onChange={(event) => setMonth(event.target.value)}
-            />
-          </label>
-        ) : (
-          <div className="date-range-controls">
-            <label>
-              From
-              <input
-                type="date"
-                value={from}
-                onChange={(event) => setFrom(event.target.value)}
-              />
-            </label>
-            <label>
-              To
-              <input
-                type="date"
-                value={to}
-                onChange={(event) => setTo(event.target.value)}
-              />
-            </label>
-          </div>
-        )}
       </header>
       <div className="report-toolbar report-screen-controls">
         <div>
@@ -1018,6 +1031,24 @@ export function ReportDetailWorkspace() {
               </select>
             </label>
           )}
+          <div className="date-range-controls report-date-range">
+            <label>
+              From
+              <input
+                type="date"
+                value={from}
+                onChange={(event) => setFrom(event.target.value)}
+              />
+            </label>
+            <label>
+              To
+              <input
+                type="date"
+                value={to}
+                onChange={(event) => setTo(event.target.value)}
+              />
+            </label>
+          </div>
           {["leads", "pipeline", "won-lost", "lead-aging"].includes(
             report.apiType,
           ) && (
@@ -1090,7 +1121,7 @@ export function ReportDetailWorkspace() {
               </label>
             </>
           )}
-          {["lost-leads", "won-lost"].includes(report.apiType) && (
+          {report.apiType === "lost-leads" && (
             <label>
               Lost reason
               <input
@@ -1103,19 +1134,92 @@ export function ReportDetailWorkspace() {
           )}
         </div>
         <div>
-          {canExport && (
-            <>
-              <button disabled={busy} onClick={() => void exportFile("pdf")}>
-                ↓ PDF
-              </button>
-              <button disabled={busy} onClick={() => void exportFile("xlsx")}>
-                ↓ Excel
-              </button>
-            </>
-          )}
-          <button onClick={() => window.print()}>Print</button>
+          <ReportChartSelector
+            apiType={report.apiType}
+            appliedType={chartType}
+            error={error}
+            from={from}
+            loading={loading}
+            onApply={setChartType}
+            rows={rows}
+            to={to}
+          />
+          <button
+            disabled={busy}
+            onClick={() => {
+              setExportFormat(canExport ? "pdf" : "print");
+              setExportDialogOpen(true);
+            }}
+            type="button"
+          >
+            Export
+          </button>
         </div>
       </div>
+      {exportDialogOpen && (
+        <div className="report-export-overlay">
+          <section
+            aria-labelledby="report-export-title"
+            aria-modal="true"
+            className="panel report-export-dialog"
+            role="dialog"
+          >
+            <h2 id="report-export-title">Choose file format</h2>
+            <div className="report-export-formats">
+              {canExport && (
+                <>
+                  <label>
+                    <input
+                      checked={exportFormat === "pdf"}
+                      name="report-export-format"
+                      onChange={() => setExportFormat("pdf")}
+                      type="radio"
+                      value="pdf"
+                    />
+                    PDF
+                  </label>
+                  <label>
+                    <input
+                      checked={exportFormat === "xlsx"}
+                      name="report-export-format"
+                      onChange={() => setExportFormat("xlsx")}
+                      type="radio"
+                      value="xlsx"
+                    />
+                    Excel
+                  </label>
+                </>
+              )}
+              <label>
+                <input
+                  checked={exportFormat === "print"}
+                  name="report-export-format"
+                  onChange={() => setExportFormat("print")}
+                  type="radio"
+                  value="print"
+                />
+                Print
+              </label>
+            </div>
+            <div className="report-export-actions">
+              <button
+                className="secondary-action"
+                onClick={() => setExportDialogOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={busy}
+                onClick={() => void exportFile()}
+                type="button"
+              >
+                {busy ? "Exporting..." : "Export"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {summaryMetrics.length > 0 && (
         <div className="summary-metrics report-summary-metrics">
           {summaryMetrics.map(([label, value]) => (
@@ -1127,44 +1231,65 @@ export function ReportDetailWorkspace() {
         </div>
       )}
       {loading && <p className="dashboard-loading">Loading report data...</p>}
-      <div className="lead-table-wrap report-table-wrap">
-        <table className="lead-table">
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column.key}>{column.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row, index) => (
-              <tr key={String(row.id ?? row.userId ?? index)}>
-                {columns.map((column) => (
-                  <td key={column.key} title={String(reportValue(row, column.key) ?? "")}>
-                    {formatReportValue(
-                      reportValue(row, column.key),
-                      column.format,
-                    )}
-                  </td>
+      {chartType === "table" ? (
+        <>
+          <div className="lead-table-wrap report-table-wrap">
+            <table className="lead-table">
+              <thead>
+                <tr>
+                  {columns.map((column) => (
+                    <th key={column.key}>{column.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row, index) => (
+                  <tr key={String(row.id ?? row.userId ?? index)}>
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        title={String(reportValue(row, column.key) ?? "")}
+                      >
+                        {formatReportValue(
+                          reportValue(row, column.key),
+                          column.format,
+                        )}
+                      </td>
+                    ))}
+                  </tr>
                 ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!loading && !error && rows.length === 0 && (
-          <div className="empty-list">No records for this report.</div>
-        )}
-        {error && <div className="empty-list">{error}</div>}
-      </div>
-      <ReportPagination
-        page={page}
-        pageSize={pageSize}
-        totalRows={rows.length}
-        label={`${report.title} pages`}
-        onPageChange={(nextPage) =>
-          setPage(Math.min(totalPages, Math.max(1, nextPage)))
-        }
-      />
+              </tbody>
+            </table>
+            {!loading && !error && rows.length === 0 && (
+              <div className="empty-list">No records for this report.</div>
+            )}
+            {error && <div className="empty-list">{error}</div>}
+          </div>
+          <ReportPagination
+            page={page}
+            pageSize={pageSize}
+            totalRows={rows.length}
+            label={`${report.title} pages`}
+            onPageChange={(nextPage) =>
+              setPage(Math.min(totalPages, Math.max(1, nextPage)))
+            }
+          />
+        </>
+      ) : loading || error ? (
+        error ? (
+          <div className="empty-list">{error}</div>
+        ) : null
+      ) : rows.length === 0 ? (
+        <div className="empty-list">No records for this report.</div>
+      ) : (
+        <ReportChart
+          apiType={report.apiType}
+          from={from}
+          rows={rows}
+          to={to}
+          type={chartType}
+        />
+      )}
       {report.apiType === "lost-leads" && rows.length > 0 && (
         <section className="panel report-reason-summary">
           <h2>Lost reasons</h2>
