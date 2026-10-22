@@ -19,6 +19,7 @@ import {
 import { PrismaService } from "../../prisma/prisma.service";
 import { CreateFollowUpDto } from "./dto/create-follow-up.dto";
 import { UpdateFollowUpDto } from "./dto/update-follow-up.dto";
+import { proposalActivityDescription } from "../proposals/proposal-activity";
 import { canTransition } from "../pipeline/stage-rules";
 
 type FollowUpFilters = {
@@ -620,16 +621,21 @@ export class FollowUpsService {
       }
       if (isProposalCompletion) {
         const discount = dto.discount ?? 0;
+        const proposalDate = new Date(dto.proposalDate!);
+        const proposalAmount = new Prisma.Decimal(dto.proposalAmount!);
+        const discountAmount = new Prisma.Decimal(discount);
+        const finalAmount = proposalAmount.minus(discountAmount);
+        const proposalFollowUpAt = new Date(dto.dueAt!);
         const proposal = await tx.proposal.create({
           data: {
             leadId: existing.leadId,
-            proposalDate: new Date(dto.proposalDate!),
+            proposalDate,
             serviceProduct: dto.serviceProduct!,
-            proposalAmount: new Prisma.Decimal(dto.proposalAmount!),
-            discount: new Prisma.Decimal(discount),
+            proposalAmount,
+            discount: discountAmount,
             tax: 0,
-            finalAmount: new Prisma.Decimal(dto.proposalAmount!).minus(discount),
-            followUpAt: new Date(dto.dueAt!),
+            finalAmount,
+            followUpAt: proposalFollowUpAt,
           },
         });
         await tx.followUp.update({
@@ -641,7 +647,23 @@ export class FollowUpsService {
             leadId: existing.leadId,
             userId: user.sub,
             type: "PROPOSAL_SENT",
-            description: `Proposal ${existing.lead.leadNumber} prepared for ${dto.serviceProduct!.trim()}`,
+            description: proposalActivityDescription({
+              leadNumber: existing.lead.leadNumber,
+              serviceProduct: dto.serviceProduct!.trim(),
+              proposalDate,
+              proposalAmount: proposalAmount.toString(),
+              discount: discountAmount.toString(),
+              tax: "0",
+              finalAmount: finalAmount.toString(),
+              followUpAt: proposalFollowUpAt,
+              nextAction: dto.nextAction ?? "Follow up on proposal",
+              remarks: dto.remarks,
+            }),
+            contactDate: proposalDate,
+            contactType: "Proposal",
+            nextAction: dto.nextAction ?? "Follow up on proposal",
+            followUpAt: proposalFollowUpAt,
+            remarks: dto.remarks?.trim() || undefined,
           },
         });
       } else if (isNegotiationCompletion) {

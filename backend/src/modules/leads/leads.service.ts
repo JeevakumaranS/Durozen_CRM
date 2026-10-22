@@ -83,13 +83,41 @@ export class LeadsService {
       include: {
         assignedBde: { select: { id: true, fullName: true } },
         activities: {
-          include: { user: { select: { fullName: true } } },
+          include: {
+            user: { select: { fullName: true } },
+            meeting: {
+              select: {
+                meetingAt: true,
+                type: true,
+                requirement: true,
+                budget: true,
+                discussionNotes: true,
+                nextAction: true,
+                followUpAt: true,
+              },
+            },
+          },
           orderBy: { createdAt: "desc" },
         },
         negotiations: {
           select: { expectedTimeline: true, customerConcern: true },
           orderBy: { createdAt: "desc" },
           take: 1,
+        },
+        proposals: {
+          select: {
+            proposalDate: true,
+            serviceProduct: true,
+            proposalAmount: true,
+            discount: true,
+            tax: true,
+            finalAmount: true,
+            customerResponse: true,
+            followUpAt: true,
+            remarks: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: "desc" },
         },
       },
     });

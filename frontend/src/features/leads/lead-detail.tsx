@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, getApiUrl } from "../../lib/api-client";
+import { getAccessToken } from "../../lib/auth";
 import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { notify } from "../../lib/notifications";
 import { formatBusinessDateTime, formatEmbeddedDateTimes } from "../../lib/business-time";
@@ -28,6 +29,15 @@ type Activity = {
   followUpAt?: string | null;
   createdAt: string;
   user?: { fullName: string } | null;
+  meeting?: {
+    meetingAt: string;
+    type: string;
+    requirement?: string | null;
+    budget?: string | number | null;
+    discussionNotes?: string | null;
+    nextAction: string;
+    followUpAt: string;
+  } | null;
 };
 type LeadDetails = {
   id: string;
@@ -55,6 +65,18 @@ type LeadDetails = {
   stageEnteredAt: string;
   assignedBde: { fullName: string };
   activities: Activity[];
+  proposals?: {
+    proposalDate: string;
+    serviceProduct: string;
+    proposalAmount: string | number;
+    discount: string | number;
+    tax: string | number;
+    finalAmount: string | number;
+    customerResponse?: string | null;
+    followUpAt?: string | null;
+    remarks?: string | null;
+    createdAt: string;
+  }[];
   negotiations?: {
     expectedTimeline?: string | null;
     customerConcern?: string | null;
@@ -73,8 +95,55 @@ const leadDate = (value: string) =>
   new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
   }).format(new Date(`${value.slice(0, 10)}T00:00:00`));
+const proposalActivityDetails = (description: string) =>
+  description
+    .split(/\r?\n/)
+    .map((line, index) => {
+      const separator = line.indexOf(": ");
+      return separator < 0
+        ? index === 0
+          ? { label: "Description", value: line }
+          : null
+        : {
+            label: line.slice(0, separator),
+            value: line.slice(separator + 2),
+          };
+    })
+    .filter((detail): detail is { label: string; value: string } =>
+      Boolean(detail?.value),
+    );
+const proposalDetailsFromRecord = (
+  proposal: NonNullable<LeadDetails["proposals"]>[number],
+) => [
+  { label: "Product / service", value: proposal.serviceProduct },
+  { label: "Proposal date", value: leadDate(proposal.proposalDate) },
+  {
+    label: "Proposal amount",
+    value: currency(Number(proposal.proposalAmount)),
+  },
+  { label: "Discount", value: currency(Number(proposal.discount)) },
+  { label: "Tax", value: currency(Number(proposal.tax)) },
+  { label: "Final amount", value: currency(Number(proposal.finalAmount)) },
+  ...(proposal.customerResponse
+    ? [{ label: "Customer response", value: proposal.customerResponse }]
+    : []),
+  ...(proposal.followUpAt
+    ? [{ label: "Follow-up", value: dateTime(proposal.followUpAt) }]
+    : []),
+  ...(proposal.remarks
+    ? [{ label: "Remarks", value: proposal.remarks }]
+    : []),
+];
 
-export function LeadDetail() {
+export function LeadDetail({
+  showActivityExport = false,
+  backHref = "/leads",
+  backLabel = "All leads",
+}: {
+  showActivityExport?: boolean;
+  backHref?: string;
+  backLabel?: string;
+}) {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const [lead, setLead] = useState<LeadDetails | null>(null);
@@ -84,6 +153,9 @@ export function LeadDetail() {
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [savingPayment, setSavingPayment] = useState(false);
+  const [exportingActivities, setExportingActivities] = useState<
+    "pdf" | "xlsx" | null
+  >(null);
   const timelineActivities = lead?.activities ?? [];
   const finalDealValue =
     Math.round(Number(lead?.finalDealValue ?? 0) * 100) / 100;
@@ -153,6 +225,51 @@ export function LeadDetail() {
     }
   }
 
+  async function exportActivities(format: "pdf" | "xlsx") {
+    if (!lead) return;
+    setExportingActivities(format);
+    try {
+      const token = getAccessToken();
+      const response = await fetch(
+        `${getApiUrl()}/exports/lead-activities/${encodeURIComponent(id)}?format=${format}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        },
+      );
+      if (!response.ok) {
+        const responseText = await response.text();
+        let message = responseText;
+        try {
+          const body: unknown = JSON.parse(responseText);
+          if (body && typeof body === "object" && "message" in body) {
+            const detail = body.message;
+            message = Array.isArray(detail)
+              ? detail.join(", ")
+              : String(detail);
+          }
+        } catch {
+          message = responseText;
+        }
+        throw new Error(message || "Unable to export lead activity.");
+      }
+      const file = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = file;
+      anchor.download = `${lead.leadNumber}-activity.${format}`;
+      anchor.click();
+      URL.revokeObjectURL(file);
+    } catch (reason) {
+      notify(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to export lead activity.",
+        "error",
+      );
+    } finally {
+      setExportingActivities(null);
+    }
+  }
+
   useEffect(() => {
     const refreshLead = (event: Event) => {
       const { leadId } = (event as CustomEvent<{ leadId: string }>).detail;
@@ -173,8 +290,8 @@ export function LeadDetail() {
   if (!lead)
     return (
       <main className="lead-workspace">
-        <Link className="detail-back" href="/leads">
-          ← Leads
+        <Link className="detail-back" href={backHref}>
+          ← {backLabel}
         </Link>
         <p>Loading lead...</p>
       </main>
@@ -182,8 +299,8 @@ export function LeadDetail() {
 
   return (
     <main className="lead-workspace">
-      <Link className="detail-back" href="/leads">
-        ← All leads
+      <Link className="detail-back" href={backHref}>
+        ← {backLabel}
       </Link>
       <header className="detail-header">
         <div>
@@ -244,24 +361,105 @@ export function LeadDetail() {
                   : "Customer interactions and updates, newest first."}
               </p>
             </div>
-            {lead.stage === "WON" && remainingBalance > 0 && (
-              <button
-                className="primary"
-                type="button"
-                onClick={() => {
-                  setPaymentAmount("");
-                  setShowPaymentForm(true);
-                }}
-              >
-                Log payment
-              </button>
-            )}
+            <div className="timeline-heading-actions">
+              {showActivityExport && (
+                <>
+                  <button
+                    className="secondary-action"
+                    disabled={exportingActivities !== null}
+                    onClick={() => void exportActivities("pdf")}
+                    type="button"
+                  >
+                    {exportingActivities === "pdf"
+                      ? "Exporting..."
+                      : "Export PDF"}
+                  </button>
+                  <button
+                    className="secondary-action"
+                    disabled={exportingActivities !== null}
+                    onClick={() => void exportActivities("xlsx")}
+                    type="button"
+                  >
+                    {exportingActivities === "xlsx"
+                      ? "Exporting..."
+                      : "Export Excel"}
+                  </button>
+                </>
+              )}
+              {lead.stage === "WON" && remainingBalance > 0 && (
+                <button
+                  className="primary"
+                  type="button"
+                  onClick={() => {
+                    setPaymentAmount("");
+                    setShowPaymentForm(true);
+                  }}
+                >
+                  Log payment
+                </button>
+              )}
+            </div>
           </div>
           <div className="activity-timeline">
-            {timelineActivities.map((activity) => (
-              <article className="timeline-item" key={activity.id}>
-                <span className="timeline-marker" />
-                <div className="timeline-entry">
+            {timelineActivities.map((activity) => {
+              const isMeetingCompletion = activity.type === "MEETING_COMPLETED";
+              const isProposalSent = activity.type === "PROPOSAL_SENT";
+              const proposalRecord = isProposalSent
+                ? lead.proposals
+                    ?.filter((proposal) =>
+                      activity.description.includes(proposal.serviceProduct),
+                    )
+                    .sort(
+                      (first, second) =>
+                        Math.abs(
+                          new Date(first.createdAt).getTime() -
+                            new Date(activity.createdAt).getTime(),
+                        ) -
+                        Math.abs(
+                          new Date(second.createdAt).getTime() -
+                            new Date(activity.createdAt).getTime(),
+                        ),
+                    )[0]
+                : undefined;
+              const proposalDetails = isProposalSent
+                ? proposalActivityDetails(activity.description)
+                : [];
+              const hasProposalInputs =
+                proposalDetails.some(
+                  ({ label }) => label === "Proposal amount",
+                );
+              const displayedProposalDetails =
+                proposalRecord && !hasProposalInputs
+                  ? proposalDetailsFromRecord(proposalRecord)
+                  : proposalDetails;
+              const contactDate =
+                activity.contactDate ??
+                (isMeetingCompletion ? activity.meeting?.meetingAt : null);
+              const contactType =
+                activity.contactType ??
+                (isMeetingCompletion ? activity.meeting?.type : null);
+              const requirement =
+                activity.requirement ??
+                (isMeetingCompletion ? activity.meeting?.requirement : null);
+              const budget =
+                activity.estimatedBudget ??
+                (isMeetingCompletion ? activity.meeting?.budget : null);
+              const remarks =
+                activity.remarks ??
+                (isMeetingCompletion
+                  ? activity.meeting?.discussionNotes
+                  : null);
+              const nextAction =
+                activity.nextAction ??
+                (isMeetingCompletion ? activity.meeting?.nextAction : null);
+              const followUpAt =
+                activity.followUpAt ??
+                (isMeetingCompletion ? activity.meeting?.followUpAt : null);
+
+              return (
+                <article className="timeline-item" key={activity.id}>
+                  <span className="timeline-marker" />
+                  <div className="timeline-entry">
                   <button
                     aria-expanded={expandedActivityId === activity.id}
                     className="timeline-entry-toggle"
@@ -287,26 +485,47 @@ export function LeadDetail() {
                   </button>
                   {expandedActivityId === activity.id && (
                     <dl className="timeline-event-details">
-                      <div>
-                        <dt>Description</dt>
-                        <dd>{formatEmbeddedDateTimes(activity.description)}</dd>
-                      </div>
+                      {isProposalSent ? (
+                        displayedProposalDetails.map(({ label, value }) => (
+                          <div key={label}>
+                            <dt>{label}</dt>
+                            <dd>{formatEmbeddedDateTimes(value)}</dd>
+                          </div>
+                        ))
+                      ) : (
+                        <div>
+                          <dt>Description</dt>
+                          <dd>{formatEmbeddedDateTimes(activity.description)}</dd>
+                        </div>
+                      )}
                       {activity.outcome && (
                         <div>
                           <dt>Outcome</dt>
                           <dd>{activity.outcome}</dd>
                         </div>
                       )}
-                      {activity.contactDate && (
+                      {!isProposalSent && contactDate && (
                         <div>
-                          <dt>Contact date</dt>
-                          <dd>{leadDate(activity.contactDate)}</dd>
+                          <dt>
+                            {isMeetingCompletion
+                              ? "Meeting date"
+                              : isProposalSent
+                                ? "Proposal date"
+                                : "Contact date"}
+                          </dt>
+                          <dd>{leadDate(contactDate)}</dd>
                         </div>
                       )}
-                      {activity.contactType && (
+                      {!isProposalSent && contactType && (
                         <div>
-                          <dt>Contact type</dt>
-                          <dd>{activity.contactType}</dd>
+                          <dt>
+                            {isMeetingCompletion
+                              ? "Meeting type"
+                              : isProposalSent
+                                ? "Activity type"
+                                : "Contact type"}
+                          </dt>
+                          <dd>{contactType}</dd>
                         </div>
                       )}
                       {activity.customerResponse && (
@@ -315,19 +534,22 @@ export function LeadDetail() {
                           <dd>{activity.customerResponse}</dd>
                         </div>
                       )}
-                      {activity.requirement && (
+                      {requirement && (
                         <div>
                           <dt>Requirement</dt>
-                          <dd>{activity.requirement}</dd>
+                          <dd>{requirement}</dd>
                         </div>
                       )}
-                      {activity.estimatedBudget !== null &&
-                        activity.estimatedBudget !== undefined && (
-                          <div>
-                            <dt>Estimated budget</dt>
-                            <dd>{currency(Number(activity.estimatedBudget))}</dd>
-                          </div>
-                        )}
+                      {budget !== null && budget !== undefined && (
+                        <div>
+                          <dt>
+                            {isMeetingCompletion
+                              ? "Meeting budget"
+                              : "Estimated budget"}
+                          </dt>
+                          <dd>{currency(Number(budget))}</dd>
+                        </div>
+                      )}
                       {activity.paymentAmount !== null &&
                         activity.paymentAmount !== undefined && (
                           <>
@@ -369,22 +591,22 @@ export function LeadDetail() {
                           <dd>{activity.expectedTimeline}</dd>
                         </div>
                       )}
-                      {activity.remarks && (
+                      {remarks && (
                         <div>
                           <dt>Remarks</dt>
-                          <dd>{activity.remarks}</dd>
+                          <dd>{remarks}</dd>
                         </div>
                       )}
-                      {activity.nextAction && (
+                      {nextAction && (
                         <div>
                           <dt>Next action</dt>
-                          <dd>{activity.nextAction}</dd>
+                          <dd>{nextAction}</dd>
                         </div>
                       )}
-                      {activity.followUpAt && (
+                      {followUpAt && (
                         <div>
                           <dt>Follow-up</dt>
-                          <dd>{dateTime(activity.followUpAt)}</dd>
+                          <dd>{dateTime(followUpAt)}</dd>
                         </div>
                       )}
                       <div>
@@ -395,9 +617,10 @@ export function LeadDetail() {
                       </div>
                     </dl>
                   )}
-                </div>
-              </article>
-            ))}
+                  </div>
+                </article>
+              );
+            })}
             {timelineActivities.length === 0 && (
               <p className="empty-list">No activity has been recorded yet.</p>
             )}

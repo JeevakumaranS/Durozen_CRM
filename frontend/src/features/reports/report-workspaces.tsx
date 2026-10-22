@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, getApiUrl } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { getAccessToken, getAuthUser } from "../../lib/auth";
 import {
@@ -376,12 +376,11 @@ async function downloadReport(
   format: "pdf" | "xlsx",
   filters: Record<string, string>,
 ) {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
   const query = new URLSearchParams({
     format,
     ...filters,
   });
-  const response = await fetch(`${apiUrl}/exports/${type}?${query}`, {
+  const response = await fetch(`${getApiUrl()}/exports/${type}?${query}`, {
     headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
   });
   if (!response.ok) throw new Error(await response.text());
@@ -1257,9 +1256,23 @@ export function ReportDetailWorkspace() {
                         key={column.key}
                         title={String(reportValue(row, column.key) ?? "")}
                       >
-                        {formatReportValue(
-                          reportValue(row, column.key),
-                          column.format,
+                        {report.apiType === "leads" &&
+                        column.key === "customerName" &&
+                        typeof row.id === "string" ? (
+                          <Link
+                            href={`/reports/lead-report/${row.id}`}
+                            title={`View activity for ${String(row.customerName ?? "lead")}`}
+                          >
+                            {formatReportValue(
+                              reportValue(row, column.key),
+                              column.format,
+                            )}
+                          </Link>
+                        ) : (
+                          formatReportValue(
+                            reportValue(row, column.key),
+                            column.format,
+                          )
                         )}
                       </td>
                     ))}

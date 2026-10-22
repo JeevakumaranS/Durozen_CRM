@@ -87,7 +87,7 @@ export default function Dashboard() {
   return (
     <main className="dashboard-overview">
         <header className="dashboard-header">
-          <div>
+          <div className="dashboard-overview-heading">
             <p className="eyebrow">
               {user?.role === "BDE"
                 ? "MY SALES OVERVIEW"
@@ -158,9 +158,6 @@ export default function Dashboard() {
                       <h2>Sales Pipeline overview</h2>
                       <p>Lead count and estimated value by stage</p>
                     </div>
-                    <Link className="text-btn" href="/pipeline">
-                      View Sales Pipeline →
-                    </Link>
                   </div>
                   <div className="bars">
                     {summary.pipeline.map((item, index) => (
@@ -197,18 +194,6 @@ export default function Dashboard() {
                     <h2>Follow-up attention</h2>
                     <p>Work due today and past due</p>
                   </div>
-                  <Link
-                    className="text-btn"
-                    href={
-                      user?.role === "SALES_MANAGER"
-                        ? "/activities/proposals"
-                        : "/activities"
-                    }
-                  >
-                    {user?.role === "SALES_MANAGER"
-                      ? "Open follow-ups →"
-                      : "Open activities →"}
-                  </Link>
                 </div>
                 <div className="attention-count">
                   <div>

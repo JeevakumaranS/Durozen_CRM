@@ -14,6 +14,7 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
 import { CreateProposalDto } from "./dto/create-proposal.dto";
 import { UpdateProposalDto } from "./dto/update-proposal.dto";
+import { proposalActivityDescription } from "./proposal-activity";
 
 @Injectable()
 export class ProposalsService {
@@ -75,6 +76,10 @@ export class ProposalsService {
       this.transitions.assertAllowed(lead.stage, LeadStage.PROPOSAL);
 
     const finalAmount = proposalAmount.minus(discount).plus(tax);
+    const proposalDate = dto.proposalDate
+      ? new Date(dto.proposalDate)
+      : new Date();
+    const followUpAt = new Date(dto.followUpAt);
     return this.prisma.$transaction(async (tx) => {
       await assertLeadHasNoOtherActiveWork(tx, lead.id);
       const stageChanged = lead.stage !== LeadStage.PROPOSAL;
@@ -88,13 +93,31 @@ export class ProposalsService {
           activities: {
             create: {
               type: "PROPOSAL_SENT",
-              description: `Proposal ${lead.leadNumber} prepared for ${dto.serviceProduct}`,
+              description: proposalActivityDescription({
+                leadNumber: lead.leadNumber,
+                serviceProduct: dto.serviceProduct,
+                proposalDate,
+                proposalAmount: proposalAmount.toString(),
+                discount: discount.toString(),
+                tax: tax.toString(),
+                finalAmount: finalAmount.toString(),
+                customerResponse: dto.customerResponse,
+                followUpAt,
+                nextAction: dto.nextAction,
+                remarks: dto.remarks,
+              }),
+              contactDate: proposalDate,
+              contactType: "Proposal",
+              customerResponse: dto.customerResponse?.trim() || undefined,
+              nextAction: dto.nextAction,
+              followUpAt,
+              remarks: dto.remarks?.trim() || undefined,
               user: { connect: { id: user.sub } },
             },
           },
           followUps: {
             create: {
-              dueAt: new Date(dto.followUpAt),
+              dueAt: followUpAt,
               type: "Proposal Follow-up",
               nextAction: dto.nextAction,
             },
@@ -104,16 +127,14 @@ export class ProposalsService {
       return tx.proposal.create({
         data: {
           leadId: lead.id,
-          proposalDate: dto.proposalDate
-            ? new Date(dto.proposalDate)
-            : new Date(),
+          proposalDate,
           serviceProduct: dto.serviceProduct,
           proposalAmount,
           discount,
           tax,
           finalAmount,
           customerResponse: dto.customerResponse,
-          followUpAt: new Date(dto.followUpAt),
+          followUpAt,
           remarks: dto.remarks,
         },
         include: {

@@ -37,8 +37,6 @@ const adminNavigation = [
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
   ["Customers", "/customers"],
-  ["Proposals", "/activities/proposals"],
-  ["BDE Performance", "/performance"],
   ["Reports", "/reports"],
 ];
 
@@ -47,7 +45,6 @@ const managerNavigation = [
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["BDE Performance", "/performance"],
   ["Reports", "/reports"],
 ];
 const bdeNavigation = [
@@ -55,7 +52,6 @@ const bdeNavigation = [
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["My Performance", "/performance"],
 ];
 
 export default function DashboardLayout({
@@ -68,6 +64,7 @@ export default function DashboardLayout({
   const [user, setUser] = useState<AuthUser | null>(null);
   const [activitiesExpanded, setActivitiesExpanded] =
     useState(isActivitySection);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [pendingCounts, setPendingCounts] = useState<PendingCounts | null>(null);
@@ -75,6 +72,19 @@ export default function DashboardLayout({
   useEffect(() => {
     if (isActivitySection) setActivitiesExpanded(true);
   }, [isActivitySection]);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMenuOpen]);
 
   useEffect(() => {
     if (!user) return;
@@ -179,10 +189,41 @@ export default function DashboardLayout({
 
   return (
     <div className="dashboard-shell">
-      <aside className="dashboard-sidebar">
-        <Link className="dashboard-brand" href="/dashboard">
-          <span>DUROZEN</span>
-          <small>CRM</small>
+      <header className="dashboard-mobile-header">
+        <button
+          aria-expanded={mobileMenuOpen}
+          aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+          className={`dashboard-mobile-menu-toggle${mobileMenuOpen ? " is-open" : ""}`}
+          onClick={() => setMobileMenuOpen((open) => !open)}
+          type="button"
+        >
+          <span />
+          <span />
+          <span />
+        </button>
+        <Link
+          className="dashboard-mobile-brand"
+          href="/dashboard"
+          onClick={() => setMobileMenuOpen(false)}
+        >
+          DUROZEN CRM
+        </Link>
+      </header>
+      {mobileMenuOpen && (
+        <button
+          aria-label="Close navigation menu"
+          className="dashboard-sidebar-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          type="button"
+        />
+      )}
+      <aside className={`dashboard-sidebar${mobileMenuOpen ? " mobile-open" : ""}`}>
+        <Link
+          className="dashboard-brand"
+          href="/dashboard"
+          onClick={() => setMobileMenuOpen(false)}
+        >
+          <span>DUROZEN CRM</span>
         </Link>
         <nav aria-label="Main navigation">
           {navigationForRole.map(([label, href]) => {
@@ -239,6 +280,7 @@ export default function DashboardLayout({
                               className={childSelected ? "selected" : ""}
                               href={childHref}
                               key={childHref}
+                              onClick={() => setMobileMenuOpen(false)}
                               title={childLabel}
                             >
                               <svg aria-hidden="true" viewBox="0 0 20 20">
@@ -272,6 +314,7 @@ export default function DashboardLayout({
                   className={`${selected ? "selected " : ""}${pendingCount !== undefined && pendingCount > 0 ? "has-pending-count" : ""}`}
                   href={href}
                   key={href}
+                  onClick={() => setMobileMenuOpen(false)}
                   title={label}
                 >
                   {label}
@@ -300,6 +343,7 @@ export default function DashboardLayout({
                     : ""
                 }
                 href="/team"
+                onClick={() => setMobileMenuOpen(false)}
                 title="Manage Team"
               >
                 Manage Team

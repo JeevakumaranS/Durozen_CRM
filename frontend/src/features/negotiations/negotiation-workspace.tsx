@@ -6,6 +6,10 @@ import { apiClient } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { notifyLeadUpdated } from "../../lib/lead-events";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
+import {
+  MobileFilterContent,
+  MobileFilterToggle,
+} from "../../components/shared/mobile-filter-disclosure";
 import { LOST_REASONS } from "../leads/lost-reasons";
 import {
   BUSINESS_TIME_ZONE,
@@ -102,6 +106,7 @@ export function NegotiationWorkspace() {
   const [assignees, setAssignees] = useState<Assignee[]>([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [enabledFilters, setEnabledFilters] = useState<
     Record<FollowUpFilterKey, boolean>
   >({
@@ -626,23 +631,30 @@ export function NegotiationWorkspace() {
           </button>
         </div>
       </header>
-      <label className="search-field follow-up-search">
-        <span aria-hidden="true">⌕</span>
-        <input
-          aria-label={`Search ${itemPlural}`}
-          placeholder="Search lead, phone, BDE, action, or notes"
-          value={search}
-          onChange={(event) => {
-            resetPage();
-            setSearch(event.target.value);
-          }}
+      <div className="follow-up-search-row">
+        <label className="search-field follow-up-search">
+          <span aria-hidden="true">⌕</span>
+          <input
+            aria-label={`Search ${itemPlural}`}
+            placeholder="Search lead, phone, BDE, action, or notes"
+            value={search}
+            onChange={(event) => {
+              resetPage();
+              setSearch(event.target.value);
+            }}
+          />
+        </label>
+        <MobileFilterToggle
+          expanded={mobileFiltersOpen}
+          onToggle={() => setMobileFiltersOpen((open) => !open)}
         />
-      </label>
+      </div>
       <div className="follow-up-results-layout">
         <aside
-          className="follow-up-filters"
+          className={`follow-up-filters${mobileFiltersOpen ? "" : " mobile-filter-closed"}`}
           aria-label={`Filter ${itemPlural}`}
         >
+          <MobileFilterContent expanded={mobileFiltersOpen}>
           <h2>Filter {itemTitle}s</h2>
           <div className="follow-up-filter-options">
             <div className="follow-up-filter-option">
@@ -816,6 +828,7 @@ export function NegotiationWorkspace() {
         >
           Clear filters
         </button>
+          </MobileFilterContent>
         </aside>
         <section className="follow-up-list">
         {!loading && items.length > 0 && (

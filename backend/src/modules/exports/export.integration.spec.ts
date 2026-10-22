@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { Workbook } from "exceljs";
 import { ExcelExportService } from "./excel.service";
 import { PdfExportService } from "./pdf.service";
-import { buildReportTable } from "./export.utils";
+import { ActivityTimelineEntry, buildReportTable } from "./export.utils";
 
 const date = new Date("2026-10-12T12:00:00.000Z");
 const longText = "Follow-up details ".repeat(24);
@@ -20,6 +20,26 @@ const fixtures: Record<string, Record<string, unknown>> = {
     stage: "CONTACTED",
     createdAt: date,
     followUpAt: date,
+  },
+  "lead-activities": {
+    type: "Phone Call",
+    createdAt: date,
+    contactDate: date,
+    contactType: "Phone Call",
+    description: longText,
+    outcome: "Interested",
+    customerResponse: "Please send the proposal",
+    requirement: longText,
+    estimatedBudget: "14000.00",
+    paymentAmount: "5000.00",
+    paymentStatus: "Advance Payment",
+    paymentTotal: "5000.00",
+    paymentBalance: "9000.00",
+    expectedTimeline: "Next month",
+    nextAction: "Send proposal",
+    followUpAt: date,
+    remarks: longText,
+    recordedBy: "BDE One",
   },
   "bde-performance": {
     name: "BDE One",
@@ -258,4 +278,86 @@ test("long report tables paginate and preserve the table header", async () => {
       buffer,
     );
   }
+});
+
+test("lead activity exports place lead information before a chronological vertical timeline", async () => {
+  const excel = new ExcelExportService();
+  const pdf = new PdfExportService();
+  const activities: ActivityTimelineEntry[] = [
+    {
+      type: "Phone Call",
+      createdAt: new Date("2026-10-10T09:00:00.000Z"),
+      details: [{ label: "Description", value: "First recorded activity" }],
+    },
+    {
+      type: "Meeting",
+      createdAt: new Date("2026-10-12T12:00:00.000Z"),
+      details: [{ label: "Description", value: "Most recent activity" }],
+    },
+  ];
+  const leadInformation = [
+    { label: "Lead number", value: "LD-2026-100" },
+    { label: "Customer", value: "Asha Rao" },
+  ];
+  const workbook = new Workbook();
+  await workbook.xlsx.load(
+    toArrayBuffer(
+      await excel.createLeadActivityTimeline(
+        "Activity Timeline - Asha Rao",
+        leadInformation,
+        activities,
+      ),
+    ),
+  );
+  const sheet = workbook.getWorksheet("Activity Timeline");
+  assert.ok(sheet);
+  assert.equal(sheet.getCell("B4").value, "Lead number");
+  const rows = Array.from({ length: sheet.rowCount }, (_, index) =>
+    sheet.getRow(index + 1),
+  );
+  const activityHeadingRow = rows.find(
+    (row) => row.getCell(2).value === "Activity Timeline",
+  );
+  assert.ok(activityHeadingRow);
+  const firstActivityRow = rows.find((row) =>
+    String(row.getCell(2).value).includes("1. Phone Call"),
+  );
+  const secondActivityRow = rows.find((row) =>
+    String(row.getCell(2).value).includes("2. Meeting"),
+  );
+  assert.ok(firstActivityRow && secondActivityRow);
+  assert.ok(activityHeadingRow.number < firstActivityRow.number);
+  assert.ok(firstActivityRow.number < secondActivityRow.number);
+  assert.ok(!sheet.autoFilter);
+  assert.equal(sheet.views?.length ?? 0, 0);
+
+  const pdfBuffer = await pdf.createLeadActivityTimeline(
+    "Activity Timeline - Asha Rao",
+    leadInformation,
+    activities,
+  );
+  assert.equal(pdfBuffer.subarray(0, 5).toString(), "%PDF-");
+});
+
+test("long lead activity timelines paginate into readable PDF pages", async () => {
+  const pdf = new PdfExportService();
+  const activities: ActivityTimelineEntry[] = Array.from(
+    { length: 40 },
+    (_, index) => ({
+      type: "Call",
+      createdAt: new Date(date.getTime() + index * 60_000),
+      details: [
+        { label: "Description", value: `${longText} ${index + 1}` },
+        { label: "Outcome", value: "Follow-up required" },
+      ],
+    }),
+  );
+  const buffer = await pdf.createLeadActivityTimeline(
+    "Activity Timeline - Asha Rao",
+    [{ label: "Customer", value: "Asha Rao" }],
+    activities,
+  );
+  const pageCount = [...buffer.toString("latin1").matchAll(/\/Type\s*\/Page\b/g)]
+    .length;
+  assert.ok(pageCount > 1, "long timeline creates multiple pages");
 });

@@ -6,6 +6,10 @@ import { apiClient } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 import { DateRangePicker } from "../../components/shared/date-range-picker";
+import {
+  MobileFilterContent,
+  MobileFilterToggle,
+} from "../../components/shared/mobile-filter-disclosure";
 import { LOST_REASONS } from "../leads/lost-reasons";
 import { MeetingCompletionFields } from "./meeting-completion-fields";
 import {
@@ -122,6 +126,7 @@ export function MeetingWorkspace() {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [dateFilterEnabled, setDateFilterEnabled] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -509,9 +514,17 @@ export function MeetingWorkspace() {
             }}
           />
         </label>
+        <MobileFilterToggle
+          expanded={mobileFiltersOpen}
+          onToggle={() => setMobileFiltersOpen((open) => !open)}
+        />
       </div>
       <div className="meeting-filter-layout">
-          <aside aria-label="Filter meetings" className="follow-up-filters">
+          <aside
+            aria-label="Filter meetings"
+            className={`follow-up-filters${mobileFiltersOpen ? "" : " mobile-filter-closed"}`}
+          >
+            <MobileFilterContent expanded={mobileFiltersOpen}>
             <h2>Filter Meetings</h2>
             <div className="follow-up-filter-options">
               <div className="follow-up-filter-option">
@@ -576,6 +589,7 @@ export function MeetingWorkspace() {
             >
               Clear filters
             </button>
+            </MobileFilterContent>
           </aside>
         <div className="meeting-filter-results">
       {loading ? (
@@ -626,8 +640,8 @@ export function MeetingWorkspace() {
                       <Link href={`/leads/${meeting.lead.id}`}>
                         {meeting.lead.customerName}
                       </Link>
-                      <p title={meeting.lead.businessName || meeting.lead.mobileNumber}>
-                        {meeting.lead.businessName || meeting.lead.mobileNumber}
+                      <p title={meeting.lead.mobileNumber}>
+                        {meeting.lead.mobileNumber}
                       </p>
                     </div>
                     <span

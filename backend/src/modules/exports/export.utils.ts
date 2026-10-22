@@ -12,6 +12,12 @@ export type ReportTable = {
   summary: { label: string; value: number | string; format?: ReportColumn["format"] }[];
 };
 
+export type ActivityTimelineEntry = {
+  type: string;
+  createdAt: Date | string;
+  details: { label: string; value: string }[];
+};
+
 const field =
   (path: string) =>
   (row: Record<string, unknown>): unknown =>
@@ -74,6 +80,26 @@ const definitions: Record<string, ReportColumn[]> = {
     column("stage", "Current Stage", 0.9),
     column("createdAt", "Created Date", 1, "date"),
     column("followUpAt", "Next Follow-up", 1, "date"),
+  ],
+  "lead-activities": [
+    column("type", "Activity Type", 0.9),
+    column("createdAt", "Recorded Date", 1, "date"),
+    column("contactDate", "Contact Date", 1, "date"),
+    column("contactType", "Contact Type", 0.9),
+    column("description", "Description", 1.8),
+    column("outcome", "Outcome", 1.2),
+    column("customerResponse", "Customer Response", 1.2),
+    column("requirement", "Requirement", 1.3),
+    column("estimatedBudget", "Estimated Budget", 1, "money"),
+    column("paymentAmount", "Payment Amount", 1, "money"),
+    column("paymentStatus", "Payment Status", 0.9),
+    column("paymentTotal", "Total Paid", 1, "money"),
+    column("paymentBalance", "Payment Balance", 1, "money"),
+    column("expectedTimeline", "Expected Timeline", 1),
+    column("nextAction", "Next Action", 1.2),
+    column("followUpAt", "Follow-up Date", 1, "date"),
+    column("remarks", "Remarks", 1.3),
+    column("recordedBy", "Recorded By", 1),
   ],
   "bde-performance": [
     column("name", "BDE Name", 1.2),

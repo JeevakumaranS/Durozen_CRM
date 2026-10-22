@@ -6,6 +6,10 @@ import { apiClient } from "../../../lib/api-client";
 import { notify } from "../../../lib/notifications";
 import { ClockDateTimePicker } from "../../../components/shared/clock-date-time-picker";
 import { DateRangePicker } from "../../../components/shared/date-range-picker";
+import {
+  MobileFilterContent,
+  MobileFilterToggle,
+} from "../../../components/shared/mobile-filter-disclosure";
 import { LOST_REASONS } from "../../../features/leads/lost-reasons";
 import { CallCompletionFields } from "../../../features/calls/call-completion-fields";
 import {
@@ -102,6 +106,7 @@ export function ActivitiesPage({
     CallTask["status"][]
   >([]);
   const [callDateFilterEnabled, setCallDateFilterEnabled] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [callDateFrom, setCallDateFrom] = useState("");
   const [callDateTo, setCallDateTo] = useState("");
   const [callTaskRefresh, setCallTaskRefresh] = useState(0);
@@ -444,7 +449,7 @@ export function ActivitiesPage({
           </Link>
         )}
       </header>
-      <div className="activity-tools">
+      <div className={`activity-tools${callsOnly ? " calls-activity-tools" : ""}`}>
         <label className="search-field">
           <span aria-hidden="true">⌕</span>
           <input
@@ -461,24 +466,30 @@ export function ActivitiesPage({
             }}
           />
         </label>
+        <MobileFilterToggle
+          expanded={mobileFiltersOpen}
+          onToggle={() => setMobileFiltersOpen((open) => !open)}
+        />
         {!callsOnly && (
-          <label>
-            Activity type
-            <select
-              value={type}
-              onChange={(event) => {
-                setType(event.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">All types</option>
-              {TYPES.map((item) => (
-                <option key={item} value={item}>
-                  {item.replaceAll("_", " ")}
-                </option>
-              ))}
-            </select>
-          </label>
+          <MobileFilterContent expanded={mobileFiltersOpen}>
+            <label>
+              Activity type
+              <select
+                value={type}
+                onChange={(event) => {
+                  setType(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All types</option>
+                {TYPES.map((item) => (
+                  <option key={item} value={item}>
+                    {item.replaceAll("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </MobileFilterContent>
         )}
       </div>
       {callsOnly ? (
@@ -489,8 +500,9 @@ export function ActivitiesPage({
           <div className="calls-filter-layout">
             <aside
               aria-label="Filter calls and messages"
-              className="follow-up-filters"
+              className={`follow-up-filters${mobileFiltersOpen ? "" : " mobile-filter-closed"}`}
             >
+              <MobileFilterContent expanded={mobileFiltersOpen}>
               <h2>Filter Calls &amp; Msg</h2>
               <div className="follow-up-filter-options">
                 <div className="follow-up-filter-option">
@@ -555,6 +567,7 @@ export function ActivitiesPage({
               >
                 Clear filters
               </button>
+              </MobileFilterContent>
             </aside>
             <div className="calls-filter-results">
               {callTasksLoading ? (

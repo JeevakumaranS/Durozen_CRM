@@ -1,6 +1,13 @@
 import { clearAccessToken, getAccessToken } from "./auth";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+export function getApiUrl(): string {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (!apiUrl) {
+    throw new Error("NEXT_PUBLIC_API_URL is not configured.");
+  }
+  return apiUrl;
+}
+
 export const API_DATA_CHANGED_EVENT = "durozen:data-changed";
 
 export class ApiError extends Error {
@@ -15,7 +22,7 @@ export class ApiError extends Error {
 
 export async function apiClient<T>(path: string, init: RequestInit = {}) {
   const token = getAccessToken();
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${getApiUrl()}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",

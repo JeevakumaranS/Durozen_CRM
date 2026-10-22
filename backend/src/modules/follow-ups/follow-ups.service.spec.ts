@@ -947,6 +947,22 @@ test("proposal follow-up completion saves a proposal without creating a successo
   assert.equal((proposalData?.discount as Prisma.Decimal).toNumber(), 5000);
   assert.equal((proposalData?.finalAmount as Prisma.Decimal).toNumber(), 120000);
   assert.equal(proposalActivity?.type, "PROPOSAL_SENT");
+  assert.equal(proposalActivity?.contactType, "Proposal");
+  assert.equal(proposalActivity?.nextAction, "Follow up on proposal");
+  assert.equal(
+    (proposalActivity?.followUpAt as Date).getTime(),
+    nextFollowUpAt.getTime(),
+  );
+  assert.match(
+    String(proposalActivity?.description),
+    /Proposal amount: ₹1,25,000\.00/,
+  );
+  assert.match(String(proposalActivity?.description), /Discount: ₹5,000\.00/);
+  assert.match(String(proposalActivity?.description), /Tax: ₹0\.00/);
+  assert.match(
+    String(proposalActivity?.description),
+    /Final amount: ₹1,20,000\.00/,
+  );
   assert.equal(linkedProposalId, "proposal-1");
   assert.equal(successor, undefined);
   assert.equal(leadUpdates.at(-1)?.stage, LeadStage.PROPOSAL);

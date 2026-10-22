@@ -1,9 +1,111 @@
 import { Injectable } from "@nestjs/common";
 import { Workbook } from "exceljs";
-import { buildReportTable } from "./export.utils";
+import { ActivityTimelineEntry, buildReportTable } from "./export.utils";
 
 @Injectable()
 export class ExcelExportService {
+  async createLeadActivityTimeline(
+    title: string,
+    leadInformation: { label: string; value: string }[],
+    activities: ActivityTimelineEntry[],
+  ): Promise<Buffer> {
+    const workbook = new Workbook();
+    const sheet = workbook.addWorksheet("Activity Timeline");
+    sheet.columns = [
+      { width: 5 },
+      { width: 25 },
+      { width: 78 },
+    ];
+    sheet.mergeCells("A1:C1");
+    const titleCell = sheet.getCell("A1");
+    titleCell.value = title;
+    titleCell.font = { bold: true, size: 16, color: { argb: "FF174955" } };
+    titleCell.alignment = { vertical: "middle" };
+    sheet.getRow(1).height = 28;
+
+    sheet.mergeCells("A3:C3");
+    const leadHeading = sheet.getCell("A3");
+    leadHeading.value = "Lead Information";
+    leadHeading.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+    leadHeading.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF174955" },
+    };
+
+    for (const { label, value } of leadInformation) {
+      const row = sheet.addRow(["", label, value]);
+      row.getCell(2).font = { bold: true, color: { argb: "FF45565A" } };
+      row.getCell(3).alignment = { wrapText: true, vertical: "top" };
+    }
+
+    sheet.addRow([]);
+    const activityHeading = sheet.addRow(["", "Activity Timeline"]);
+    sheet.mergeCells(`B${activityHeading.number}:C${activityHeading.number}`);
+    activityHeading.getCell(2).font = {
+      bold: true,
+      size: 12,
+      color: { argb: "FFFFFFFF" },
+    };
+    activityHeading.getCell(2).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF174955" },
+    };
+    activityHeading.getCell(3).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF174955" },
+    };
+
+    if (!activities.length) {
+      const row = sheet.addRow(["", "Activity", "No activity has been recorded."]);
+      row.getCell(2).font = { bold: true, color: { argb: "FF45565A" } };
+    }
+
+    activities.forEach((activity, index) => {
+      const date =
+        activity.createdAt instanceof Date
+          ? activity.createdAt
+          : new Date(activity.createdAt);
+      const formattedDate = Number.isNaN(date.getTime())
+        ? String(activity.createdAt)
+        : new Intl.DateTimeFormat("en-IN", {
+            dateStyle: "medium",
+            timeStyle: "short",
+          }).format(date);
+      const heading = sheet.addRow([
+        "●",
+        `${index + 1}. ${activity.type.replaceAll("_", " ")} · ${formattedDate}`,
+      ]);
+      sheet.mergeCells(`B${heading.number}:C${heading.number}`);
+      heading.getCell(1).font = { bold: true, color: { argb: "FF368D83" } };
+      heading.getCell(2).font = { bold: true, color: { argb: "FF174955" } };
+      heading.getCell(2).border = {
+        bottom: { style: "thin", color: { argb: "FFB9D3CF" } },
+      };
+      heading.getCell(3).border = {
+        bottom: { style: "thin", color: { argb: "FFB9D3CF" } },
+      };
+      for (const { label, value } of activity.details) {
+        if (!value) continue;
+        const detail = sheet.addRow(["│", label, value]);
+        detail.getCell(1).font = { color: { argb: "FF9BBDB7" } };
+        detail.getCell(2).font = { bold: true, color: { argb: "FF45565A" } };
+        detail.getCell(3).alignment = { wrapText: true, vertical: "top" };
+      }
+      sheet.addRow([]);
+    });
+
+    sheet.pageSetup = {
+      orientation: "portrait",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+    };
+    return Buffer.from(await workbook.xlsx.writeBuffer());
+  }
+
   async create(
     rows: unknown[],
     type: string,

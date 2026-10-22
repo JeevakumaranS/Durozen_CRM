@@ -4,5 +4,6 @@ node_modules/
 .next-production/
 dist/
 .env
+.env.local
 *.log
 *.tsbuildinfo

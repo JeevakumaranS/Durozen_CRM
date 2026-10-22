@@ -450,7 +450,7 @@ export function LeadWorkspace({
         });
         setForm({
           ...createEmptyLeadForm(),
-          assignedBdeId: assignees[0]?.id ?? "",
+          assignedBdeId: isAdmin ? "" : (assignees[0]?.id ?? ""),
         });
         setEditingLeadId(null);
         setOriginalAssignedBdeId("");
@@ -494,7 +494,7 @@ export function LeadWorkspace({
       });
       setForm({
         ...createEmptyLeadForm(),
-        assignedBdeId: assignees[0]?.id ?? "",
+        assignedBdeId: isAdmin ? "" : (assignees[0]?.id ?? ""),
       });
       setShowForm(false);
       setOriginalAssignedBdeId("");
@@ -579,7 +579,7 @@ export function LeadWorkspace({
   function openCreateLeadForm() {
     setForm({
       ...createEmptyLeadForm(),
-      assignedBdeId: assignees[0]?.id ?? "",
+      assignedBdeId: isAdmin ? "" : (assignees[0]?.id ?? ""),
     });
     setEditingLeadId(null);
     setOriginalAssignedBdeId("");
@@ -3248,7 +3248,7 @@ export function LeadWorkspace({
                         setForm({ ...form, assignedBdeId: event.target.value })
                       }
                     >
-                      <option value="">Select owner</option>
+                      <option value="">No BDE selected</option>
                       {editingLeadId &&
                         originalAssignedBdeId &&
                         !assignees.some(

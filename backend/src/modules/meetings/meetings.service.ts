@@ -449,6 +449,14 @@ export class MeetingsService {
           userId: user.sub,
           type: "MEETING_COMPLETED",
           description: `Meeting completed at ${formatBusinessDateTime(completedAt)}`,
+          outcome: isLost ? `Lost reason: ${dto.lostReason!.trim()}` : undefined,
+          nextAction: dto.nextAction,
+          contactDate: existing.meetingAt,
+          contactType: existing.type,
+          requirement: dto.requirement.trim(),
+          estimatedBudget: dto.budget ?? null,
+          remarks: dto.discussionNotes?.trim() || undefined,
+          followUpAt,
         },
       });
       await tx.followUp.updateMany({
