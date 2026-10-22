@@ -7,6 +7,7 @@ import { notify } from "../../../lib/notifications";
 import { ClockDateTimePicker } from "../../../components/shared/clock-date-time-picker";
 import { DateRangePicker } from "../../../components/shared/date-range-picker";
 import { LOST_REASONS } from "../../../features/leads/lost-reasons";
+import { CallCompletionFields } from "../../../features/calls/call-completion-fields";
 import {
   businessDateKey,
   businessDateTimeInputValue,
@@ -79,7 +80,9 @@ const TYPES = [
 ];
 const PAGE_SIZE = 15;
 const localDateKey = (date: Date) => {
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  const localDate = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60_000,
+  );
   return localDate.toISOString().slice(0, 10);
 };
 
@@ -140,7 +143,8 @@ export function ActivitiesPage({
     let current = true;
     setCallTasksLoading(true);
     const params = new URLSearchParams();
-    if (callStatusFilters.length) params.set("status", callStatusFilters.join(","));
+    if (callStatusFilters.length)
+      params.set("status", callStatusFilters.join(","));
     if (callDateFilterEnabled && callDateFrom) params.set("from", callDateFrom);
     if (callDateFilterEnabled && callDateTo) params.set("to", callDateTo);
     Promise.all([
@@ -151,10 +155,11 @@ export function ActivitiesPage({
         if (!current) return;
         setCallTasks(
           scheduledCalls
-            .filter((task) =>
-              ["phone call", "call", "whatsapp", "email"].includes(
-                task.contactMethod.trim().toLowerCase(),
-              ) &&
+            .filter(
+              (task) =>
+                ["phone call", "call", "whatsapp", "email"].includes(
+                  task.contactMethod.trim().toLowerCase(),
+                ) &&
                 (!callStatusFilters.length ||
                   callStatusFilters.includes(task.status)),
             )
@@ -167,9 +172,7 @@ export function ActivitiesPage({
             ),
         );
         setContactLeads(
-          leads.filter((lead) =>
-            !["WON", "LOST"].includes(lead.stage),
-          ),
+          leads.filter((lead) => !["WON", "LOST"].includes(lead.stage)),
         );
       })
       .catch((reason: unknown) => {
@@ -254,12 +257,12 @@ export function ActivitiesPage({
   ) {
     setCallDialog(mode);
     setCompletingCall(
-      mode === "complete" || mode === "reschedule" ? task ?? null : null,
+      mode === "complete" || mode === "reschedule" ? (task ?? null) : null,
     );
     setCallLeadId(task?.lead.id ?? "");
     setCallType(task?.contactMethod ?? "Phone Call");
-    setCallDescription(mode === "complete" ? task?.description ?? "" : "");
-    setCallOutcome(mode === "complete" ? task?.outcome ?? "" : "");
+    setCallDescription(mode === "complete" ? (task?.description ?? "") : "");
+    setCallOutcome(mode === "complete" ? (task?.outcome ?? "") : "");
     setCallResponseAction("");
     setCallContactDate(mode === "complete" ? localDateKey(new Date()) : "");
     setCallCustomerResponse("");
@@ -306,10 +309,7 @@ export function ActivitiesPage({
         notify("Choose whether to schedule a meeting.", "error");
         return;
       }
-      if (
-        scheduleMeeting &&
-        (!meetingDate || !meetingTime || !meetingType)
-      ) {
+      if (scheduleMeeting && (!meetingDate || !meetingTime || !meetingType)) {
         notify("Enter the meeting date, time, and type.", "error");
         return;
       }
@@ -354,9 +354,8 @@ export function ActivitiesPage({
                   : callLostReasonType
                 : undefined,
             remarks: callRemarks.trim() || undefined,
-            scheduleMeeting: callResponseAction === "Interested"
-              ? scheduleMeeting
-              : false,
+            scheduleMeeting:
+              callResponseAction === "Interested" ? scheduleMeeting : false,
             meetingAt: scheduleMeeting
               ? businessDateTimeToIso(`${meetingDate}T${meetingTime}`)
               : undefined,
@@ -450,7 +449,11 @@ export function ActivitiesPage({
           <span aria-hidden="true">⌕</span>
           <input
             aria-label="Search activities"
-            placeholder={callsOnly ? "Search leads..." : "Search customer, description, BDE..."}
+            placeholder={
+              callsOnly
+                ? "Search leads..."
+                : "Search customer, description, BDE..."
+            }
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
@@ -479,255 +482,304 @@ export function ActivitiesPage({
         )}
       </div>
       {callsOnly ? (
-        <section className="calls-leads-section" aria-label="Leads with call and message next actions">
+        <section
+          className="calls-leads-section"
+          aria-label="Leads with call and message next actions"
+        >
           <div className="calls-filter-layout">
-              <aside aria-label="Filter calls and messages" className="follow-up-filters">
-                <h2>Filter Calls &amp; Msg</h2>
-                <div className="follow-up-filter-options">
-                  <div className="follow-up-filter-option">
-                    <strong className="follow-up-status-filter-heading">Status</strong>
-                    {(["PENDING", "COMPLETED"] as const).map(
-                      (status) => (
-                        <label className="follow-up-filter-checkbox" key={status}>
-                          <input
-                            checked={callStatusFilters.includes(status)}
-                            onChange={(event) => {
-                              setExpandedCallTaskId(null);
-                              setCallStatusFilters((current) =>
-                                event.target.checked
-                                  ? [...current, status]
-                                  : current.filter((item) => item !== status),
-                              );
-                            }}
-                            type="checkbox"
-                          />
-                          {status.charAt(0) + status.slice(1).toLowerCase()}
-                        </label>
-                      ),
-                    )}
-                  </div>
-                  <div className="follow-up-filter-option">
-                    <label className="follow-up-filter-checkbox">
+            <aside
+              aria-label="Filter calls and messages"
+              className="follow-up-filters"
+            >
+              <h2>Filter Calls &amp; Msg</h2>
+              <div className="follow-up-filter-options">
+                <div className="follow-up-filter-option">
+                  <strong className="follow-up-status-filter-heading">
+                    Status
+                  </strong>
+                  {(["PENDING", "COMPLETED"] as const).map((status) => (
+                    <label className="follow-up-filter-checkbox" key={status}>
                       <input
-                        checked={callDateFilterEnabled}
+                        checked={callStatusFilters.includes(status)}
                         onChange={(event) => {
-                          setCallDateFilterEnabled(event.target.checked);
-                          if (!event.target.checked) {
-                            setCallDateFrom("");
-                            setCallDateTo("");
-                          }
+                          setExpandedCallTaskId(null);
+                          setCallStatusFilters((current) =>
+                            event.target.checked
+                              ? [...current, status]
+                              : current.filter((item) => item !== status),
+                          );
                         }}
                         type="checkbox"
                       />
-                      Date
+                      {status.charAt(0) + status.slice(1).toLowerCase()}
                     </label>
-                    {callDateFilterEnabled && (
-                      <DateRangePicker
-                        from={callDateFrom}
-                        onChange={(from, to) => {
-                          setCallDateFrom(from);
-                          setCallDateTo(to);
-                        }}
-                        to={callDateTo}
-                      />
-                    )}
-                  </div>
+                  ))}
                 </div>
-                <button
-                  className="secondary-action follow-up-clear"
-                  onClick={() => {
-                    setCallStatusFilters([]);
-                    setCallDateFilterEnabled(false);
-                    setCallDateFrom("");
-                    setCallDateTo("");
-                    setExpandedCallTaskId(null);
-                  }}
-                  type="button"
-                >
-                  Clear filters
-                </button>
-              </aside>
+                <div className="follow-up-filter-option">
+                  <label className="follow-up-filter-checkbox">
+                    <input
+                      checked={callDateFilterEnabled}
+                      onChange={(event) => {
+                        setCallDateFilterEnabled(event.target.checked);
+                        if (!event.target.checked) {
+                          setCallDateFrom("");
+                          setCallDateTo("");
+                        }
+                      }}
+                      type="checkbox"
+                    />
+                    Date
+                  </label>
+                  {callDateFilterEnabled && (
+                    <DateRangePicker
+                      from={callDateFrom}
+                      onChange={(from, to) => {
+                        setCallDateFrom(from);
+                        setCallDateTo(to);
+                      }}
+                      to={callDateTo}
+                    />
+                  )}
+                </div>
+              </div>
+              <button
+                className="secondary-action follow-up-clear"
+                onClick={() => {
+                  setCallStatusFilters([]);
+                  setCallDateFilterEnabled(false);
+                  setCallDateFrom("");
+                  setCallDateTo("");
+                  setExpandedCallTaskId(null);
+                }}
+                type="button"
+              >
+                Clear filters
+              </button>
+            </aside>
             <div className="calls-filter-results">
-          {callTasksLoading ? (
-            <div className="empty-list" role="status">Loading scheduled calls...</div>
-          ) : visibleCallTasks.length === 0 ? (
-            <div className="empty-list">
-              No scheduled calls or messages match these filters.
-            </div>
-          ) : (
-            <div className="lead-table-wrap calls-lead-table-wrap">
-              <table className="lead-table calls-lead-table">
-                <thead>
-                  <tr>
-                    <th>Customer</th>
-                    <th>Company</th>
-                    <th>Next action</th>
-                    <th>Stage</th>
-                    <th>Assigned BDE</th>
-                    <th>Date</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleCallTasks.map((task, index) => {
-                    const taskDayKey = businessDateKey(task.dueAt);
-                    const todayKey = businessDateKey(new Date());
-                    const urgency =
-                      task.status === "PENDING" &&
-                      taskDayKey !== "" &&
-                      taskDayKey < todayKey
-                        ? "overdue"
-                        : task.status === "PENDING" &&
-                            taskDayKey !== "" &&
-                            taskDayKey === todayKey
-                          ? "due-today"
-                          : "";
-                    return (
-                    <Fragment key={task.id}>
-                      <tr
-                        className={`calls-lead-table-row${index % 2 ? " is-striped" : ""}${urgency ? ` ${urgency}` : ""}`}
-                      >
-                        <td>
-                          <button
-                            aria-expanded={expandedCallTaskId === task.id}
-                            className="calls-table-expand"
-                            onClick={() =>
-                              setExpandedCallTaskId((current) =>
-                                current === task.id ? null : task.id,
-                              )
-                            }
-                            type="button"
-                          >
-                            {task.lead.customerName}
-                          </button>
-                          <small>{task.lead.mobileNumber}</small>
-                        </td>
-                        <td>{task.lead.businessName || "—"}</td>
-                        <td>
-                          {task.contactMethod}
-                          {task.status === "PENDING" && (
-                            <span
-                              className={`calls-pending-label${urgency ? ` ${urgency}` : ""}`}
+              {callTasksLoading ? (
+                <div className="empty-list" role="status">
+                  Loading scheduled calls...
+                </div>
+              ) : visibleCallTasks.length === 0 ? (
+                <div className="empty-list">
+                  No scheduled calls or messages match these filters.
+                </div>
+              ) : (
+                <div className="lead-table-wrap calls-lead-table-wrap">
+                  <table className="lead-table calls-lead-table">
+                    <thead>
+                      <tr>
+                        <th>Customer</th>
+                        <th>Company</th>
+                        <th>Next action</th>
+                        <th>Stage</th>
+                        <th>Assigned BDE</th>
+                        <th>Date</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleCallTasks.map((task, index) => {
+                        const taskDayKey = businessDateKey(task.dueAt);
+                        const todayKey = businessDateKey(new Date());
+                        const urgency =
+                          task.status === "PENDING" &&
+                          taskDayKey !== "" &&
+                          taskDayKey < todayKey
+                            ? "overdue"
+                            : task.status === "PENDING" &&
+                                taskDayKey !== "" &&
+                                taskDayKey === todayKey
+                              ? "due-today"
+                              : "";
+                        return (
+                          <Fragment key={task.id}>
+                            <tr
+                              className={`calls-lead-table-row${index % 2 ? " is-striped" : ""}${urgency ? ` ${urgency}` : ""}`}
                             >
-                              {urgency === "overdue"
-                                ? "Overdue"
-                                : urgency === "due-today"
-                                  ? "Due today"
-                                  : "Pending"}
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          <span className="stage-pill">
-                            {task.lead.stage.replaceAll("_", " ")}
-                          </span>
-                        </td>
-                        <td>{task.lead.assignedBde.fullName}</td>
-                        <td>
-                          {formatBusinessDateTime(task.dueAt)}
-                        </td>
-                        <td>
-                          {task.status === "PENDING" ? (
-                            <>
-                              {task.contactMethod.trim().toLowerCase() ===
-                                "phone call" && (
+                              <td>
                                 <button
-                                  className="lead-edit"
+                                  aria-expanded={expandedCallTaskId === task.id}
+                                  className="calls-table-expand"
                                   onClick={() =>
-                                    openCallDialog("reschedule", task)
+                                    setExpandedCallTaskId((current) =>
+                                      current === task.id ? null : task.id,
+                                    )
                                   }
                                   type="button"
                                 >
-                                  Reschedule
+                                  {task.lead.customerName}
                                 </button>
-                              )}
-                              <button
-                                className="lead-edit"
-                                onClick={() => openCallDialog("complete", task)}
-                                type="button"
-                              >
-                                Complete
-                              </button>
-                            </>
-                          ) : (
-                            <span className="calls-completed-label">Completed</span>
-                          )}
-                        </td>
-                      </tr>
-                      {expandedCallTaskId === task.id && (
-                        <tr className="calls-lead-detail-row">
-                          <td colSpan={7}>
-                            <div className="calls-lead-details">
-                              <dl>
-                                <div><dt>Contact method</dt><dd>{task.contactMethod}</dd></div>
-                                <div><dt>Due date</dt><dd>{formatBusinessDateTime(task.dueAt)}</dd></div>
-                                <div><dt>Phone</dt><dd>{task.lead.mobileNumber}</dd></div>
-                                <div><dt>Company</dt><dd>{task.lead.businessName || "—"}</dd></div>
-                                <div><dt>Stage</dt><dd>{task.lead.stage.replaceAll("_", " ")}</dd></div>
-                                <div><dt>Assigned BDE</dt><dd>{task.lead.assignedBde.fullName}</dd></div>
-                                {task.description && <div className="calls-lead-remarks"><dt>Notes</dt><dd>{task.description}</dd></div>}
-                                {task.outcome && <div className="calls-lead-remarks"><dt>Outcome</dt><dd>{task.outcome}</dd></div>}
-                              </dl>
-                              <Link href={`/leads/${task.lead.id}`}>Open lead details</Link>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                                <small>{task.lead.mobileNumber}</small>
+                              </td>
+                              <td>{task.lead.businessName || "—"}</td>
+                              <td>
+                                {task.contactMethod}
+                                {task.status === "PENDING" && (
+                                  <span
+                                    className={`calls-pending-label${urgency ? ` ${urgency}` : ""}`}
+                                  >
+                                    {urgency === "overdue"
+                                      ? "Overdue"
+                                      : urgency === "due-today"
+                                        ? "Due today"
+                                        : "Pending"}
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                <span className="stage-pill">
+                                  {task.lead.stage.replaceAll("_", " ")}
+                                </span>
+                              </td>
+                              <td>{task.lead.assignedBde.fullName}</td>
+                              <td>{formatBusinessDateTime(task.dueAt)}</td>
+                              <td>
+                                {task.status === "PENDING" ? (
+                                  <>
+                                    {task.contactMethod.trim().toLowerCase() ===
+                                      "phone call" && (
+                                      <button
+                                        className="lead-edit"
+                                        onClick={() =>
+                                          openCallDialog("reschedule", task)
+                                        }
+                                        type="button"
+                                      >
+                                        Reschedule
+                                      </button>
+                                    )}
+                                    <button
+                                      className="lead-edit"
+                                      onClick={() =>
+                                        openCallDialog("complete", task)
+                                      }
+                                      type="button"
+                                    >
+                                      Complete
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="calls-completed-label">
+                                    Completed
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                            {expandedCallTaskId === task.id && (
+                              <tr className="calls-lead-detail-row">
+                                <td colSpan={7}>
+                                  <div className="calls-lead-details">
+                                    <dl>
+                                      <div>
+                                        <dt>Contact method</dt>
+                                        <dd>{task.contactMethod}</dd>
+                                      </div>
+                                      <div>
+                                        <dt>Due date</dt>
+                                        <dd>
+                                          {formatBusinessDateTime(task.dueAt)}
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt>Phone</dt>
+                                        <dd>{task.lead.mobileNumber}</dd>
+                                      </div>
+                                      <div>
+                                        <dt>Company</dt>
+                                        <dd>{task.lead.businessName || "—"}</dd>
+                                      </div>
+                                      <div>
+                                        <dt>Stage</dt>
+                                        <dd>
+                                          {task.lead.stage.replaceAll("_", " ")}
+                                        </dd>
+                                      </div>
+                                      <div>
+                                        <dt>Assigned BDE</dt>
+                                        <dd>
+                                          {task.lead.assignedBde.fullName}
+                                        </dd>
+                                      </div>
+                                      {task.outcome && (
+                                        <div className="calls-lead-remarks">
+                                          <dt>Outcome</dt>
+                                          <dd>{task.outcome}</dd>
+                                        </div>
+                                      )}
+                                    </dl>
+                                    <Link href={`/leads/${task.lead.id}`}>
+                                      Open lead details
+                                    </Link>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </section>
       ) : (
-      <section className="global-activity-list">
-        {loading ? (
-          <div className="empty-list" role="status">Loading activities...</div>
-        ) : activities.map((activity) => (
-          <article className="global-activity" key={activity.id}>
-            <span className="global-activity-marker" />
-            <div className="global-activity-content">
-              <div className="global-activity-top">
-                <div>
-                      <strong>
-                        {(activity.contactType || activity.type).replaceAll("_", " ")}
-                  </strong>
-                  <span>
-                    {activity.user?.fullName ||
-                      activity.lead.assignedBde.fullName}
-                  </span>
-                </div>
-                <time>
-                  {new Intl.DateTimeFormat("en-IN", {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  }).format(new Date(activity.createdAt))}
-                </time>
-              </div>
-              <p>{formatEmbeddedDateTimes(activity.description)}</p>
-              {activity.outcome && <small>Outcome: {activity.outcome}</small>}
-              {activity.nextAction && (
-                <small>Next action: {activity.nextAction}</small>
-              )}
-              <Link href={`/leads/${activity.lead.id}`}>
-                {activity.lead.customerName}
-                {activity.lead.businessName
-                  ? ` · ${activity.lead.businessName}`
-                  : ""}
-              </Link>
+        <section className="global-activity-list">
+          {loading ? (
+            <div className="empty-list" role="status">
+              Loading activities...
             </div>
-          </article>
-        ))}
-        {!loading && activities.length === 0 && (
-          <div className="empty-list">
-            No activity recorded for these filters.
-          </div>
-        )}
-      </section>
+          ) : (
+            activities.map((activity) => (
+              <article className="global-activity" key={activity.id}>
+                <span className="global-activity-marker" />
+                <div className="global-activity-content">
+                  <div className="global-activity-top">
+                    <div>
+                      <strong>
+                        {(activity.contactType || activity.type).replaceAll(
+                          "_",
+                          " ",
+                        )}
+                      </strong>
+                      <span>
+                        {activity.user?.fullName ||
+                          activity.lead.assignedBde.fullName}
+                      </span>
+                    </div>
+                    <time>
+                      {new Intl.DateTimeFormat("en-IN", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }).format(new Date(activity.createdAt))}
+                    </time>
+                  </div>
+                  <p>{formatEmbeddedDateTimes(activity.description)}</p>
+                  {activity.outcome && (
+                    <small>Outcome: {activity.outcome}</small>
+                  )}
+                  {activity.nextAction && (
+                    <small>Next action: {activity.nextAction}</small>
+                  )}
+                  <Link href={`/leads/${activity.lead.id}`}>
+                    {activity.lead.customerName}
+                    {activity.lead.businessName
+                      ? ` · ${activity.lead.businessName}`
+                      : ""}
+                  </Link>
+                </div>
+              </article>
+            ))
+          )}
+          {!loading && activities.length === 0 && (
+            <div className="empty-list">
+              No activity recorded for these filters.
+            </div>
+          )}
+        </section>
       )}
       {callsOnly && callDialog && (
         <div className="modal-backdrop">
@@ -750,6 +802,7 @@ export function ActivitiesPage({
                         : "Log call"}
                 </h2>
               </div>
+              in
               <button
                 aria-label="Close"
                 className="modal-close"
@@ -764,7 +817,10 @@ export function ActivitiesPage({
                 <>
                   <label className="form-wide">
                     Lead
-                    <input readOnly value={completingCall?.lead.customerName ?? ""} />
+                    <input
+                      readOnly
+                      value={completingCall?.lead.customerName ?? ""}
+                    />
                   </label>
                   <ClockDateTimePicker
                     className="form-wide"
@@ -777,175 +833,37 @@ export function ActivitiesPage({
                 </>
               ) : callDialog === "complete" ? (
                 <>
-                  <label className="form-wide">
-                    Lead name *
-                    <input
-                      readOnly
-                      required
-                      value={completingCall?.lead.customerName ?? ""}
-                    />
-                  </label>
-                  <label>
-                    Contact type *
-                    <input
-                      readOnly
-                      required
-                      value={completingCall?.contactMethod ?? ""}
-                    />
-                  </label>
-                  <label>
-                    Contact date *
-                    <input readOnly required type="date" value={callContactDate} />
-                  </label>
-                  <label className="form-wide">
-                    Next action *
-                    <select
-                      required
-                      value={callResponseAction}
-                      onChange={(event) => {
-                        setCallResponseAction(event.target.value);
-                        setScheduleMeeting(null);
-                        setMeetingDate("");
-                        setMeetingTime("");
-                        setMeetingType("");
-                      }}
-                    >
-                      <option value="">Select the customer response</option>
-                      <option value="Interested">Interested</option>
-                      <option value="Not Interested">Not interested</option>
-                      <option value="Decision pending">Decision pending</option>
-                    </select>
-                  </label>
-                  {callResponseAction && (
-                    <>
-                      {callResponseAction === "Not Interested" ? (
-                        <>
-                          <label className="form-wide">
-                            Lost reason *
-                            <select
-                              required
-                              value={callLostReasonType}
-                              onChange={(event) => {
-                                setCallLostReasonType(event.target.value);
-                                setCallOtherLostReason("");
-                              }}
-                            >
-                              {LOST_REASONS.map((reason) => (
-                                <option key={reason}>{reason}</option>
-                              ))}
-                            </select>
-                          </label>
-                          {callLostReasonType === "Other" && (
-                            <label className="form-wide">
-                              Other reason *
-                              <input
-                                required
-                                value={callOtherLostReason}
-                                onChange={(event) =>
-                                  setCallOtherLostReason(event.target.value)
-                                }
-                              />
-                            </label>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <label className="form-wide">
-                            Customer response *
-                            <textarea
-                              required
-                              rows={3}
-                              value={callCustomerResponse}
-                              onChange={(event) =>
-                                setCallCustomerResponse(event.target.value)
-                              }
-                            />
-                          </label>
-                          <label className="form-wide">
-                            Requirements *
-                            <textarea
-                              required
-                              rows={3}
-                              value={callRequirement}
-                              onChange={(event) =>
-                                setCallRequirement(event.target.value)
-                              }
-                            />
-                          </label>
-                        </>
-                      )}
-                      <label className="form-wide">
-                        Remarks
-                        <textarea
-                          rows={2}
-                          value={callRemarks}
-                          onChange={(event) => setCallRemarks(event.target.value)}
-                        />
-                      </label>
-                    </>
-                  )}
-                  {callResponseAction === "Interested" && (
-                    <label className="form-wide">
-                      Schedule a meeting? *
-                      <select
-                        required
-                        value={
-                          scheduleMeeting === null
-                            ? ""
-                            : scheduleMeeting
-                              ? "yes"
-                              : "no"
-                        }
-                        onChange={(event) => {
-                          setScheduleMeeting(event.target.value === "yes");
-                          setMeetingDate("");
-                          setMeetingTime("");
-                          setMeetingType("");
-                        }}
-                      >
-                        <option value="">Choose an option</option>
-                        <option value="yes">Yes</option>
-                        <option value="no">No</option>
-                      </select>
-                    </label>
-                  )}
-                  {scheduleMeeting && callResponseAction === "Interested" && (
-                    <>
-                      <ClockDateTimePicker
-                        className="form-wide"
-                        label="Meeting date and time"
-                        required
-                        minValue={`${localDateKey(new Date())}T00:00`}
-                        value={
-                          meetingDate && meetingTime
-                            ? `${meetingDate}T${meetingTime}`
-                            : ""
-                        }
-                        onChange={(value) => {
-                          const [date, time] = value.split("T");
-                          setMeetingDate(date);
-                          setMeetingTime(time);
-                        }}
-                      />
-                      <label className="form-wide">
-                        Meeting type *
-                        <select
-                          required
-                          value={meetingType}
-                          onChange={(event) =>
-                            setMeetingType(event.target.value)
-                          }
-                        >
-                          <option value="">Choose a meeting type</option>
-                          <option>Online Meeting</option>
-                          <option>Offline Meeting</option>
-                          <option>Product Demo</option>
-                          <option>Requirement Discussion</option>
-                          <option>Business Discussion</option>
-                        </select>
-                      </label>
-                    </>
-                  )}
+                  <CallCompletionFields
+                    leadName={completingCall?.lead.customerName ?? ""}
+                    contactMethod={completingCall?.contactMethod ?? ""}
+                    contactDate={callContactDate}
+                    responseAction={callResponseAction}
+                    customerResponse={callCustomerResponse}
+                    requirement={callRequirement}
+                    lostReasonType={callLostReasonType}
+                    otherLostReason={callOtherLostReason}
+                    remarks={callRemarks}
+                    scheduleMeeting={scheduleMeeting}
+                    meetingAt={
+                      meetingDate && meetingTime
+                        ? `${meetingDate}T${meetingTime}`
+                        : ""
+                    }
+                    meetingType={meetingType}
+                    setResponseAction={setCallResponseAction}
+                    setCustomerResponse={setCallCustomerResponse}
+                    setRequirement={setCallRequirement}
+                    setLostReasonType={setCallLostReasonType}
+                    setOtherLostReason={setCallOtherLostReason}
+                    setRemarks={setCallRemarks}
+                    setScheduleMeeting={setScheduleMeeting}
+                    setMeetingAt={(value) => {
+                      const [date = "", time = ""] = value.split("T");
+                      setMeetingDate(date);
+                      setMeetingTime(time);
+                    }}
+                    setMeetingType={setMeetingType}
+                  />
                 </>
               ) : (
                 <>
@@ -988,7 +906,9 @@ export function ActivitiesPage({
                       required={callDialog !== "schedule"}
                       rows={3}
                       value={callDescription}
-                      onChange={(event) => setCallDescription(event.target.value)}
+                      onChange={(event) =>
+                        setCallDescription(event.target.value)
+                      }
                     />
                   </label>
                   {callDialog !== "schedule" && (
@@ -1011,7 +931,7 @@ export function ActivitiesPage({
                       ? "Completed calls are retained in Logs."
                       : callDialog === "reschedule"
                         ? "The call remains pending at the new date and time."
-                      : "This call is saved directly to Logs."}
+                        : "This call is saved directly to Logs."}
                 </p>
                 <button className="primary" disabled={callBusy}>
                   {callBusy
@@ -1022,7 +942,7 @@ export function ActivitiesPage({
                         ? "Schedule call"
                         : callDialog === "reschedule"
                           ? "Reschedule call"
-                        : "Log call"}
+                          : "Log call"}
                 </button>
               </div>
             </form>

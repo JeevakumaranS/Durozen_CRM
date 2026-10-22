@@ -14,6 +14,7 @@ import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { canTransition } from "../pipeline/stage-rules";
 import { CompleteCallMessageDto } from "./dto/complete-call-message.dto";
+import { CompleteLeadCallDto } from "./dto/complete-lead-call.dto";
 import { CreateCallMessageDto } from "./dto/create-call-message.dto";
 
 const CONTACT_METHODS = ["Phone Call", "WhatsApp", "Email"];
@@ -215,6 +216,57 @@ export class CallsMessagesService {
     user: Actor,
   ) {
     assertActorRole(user, ["ADMIN", "BDE"]);
+    const existing = await this.prisma.callMessage.findFirst({
+      where: { id, lead: leadScope(user) },
+      include: { lead: { select: { id: true, stage: true } } },
+    });
+    if (!existing) throw new NotFoundException("Call or message task not found");
+    if (existing.status !== FollowUpStatus.PENDING) {
+      throw new BadRequestException("Only pending call tasks can be completed.");
+    }
+    return this.finishCompletion(existing, dto, user);
+  }
+
+  async completeLead(dto: CompleteLeadCallDto, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: dto.leadId, ...leadScope(user) },
+      select: { id: true, stage: true },
+    });
+    if (!lead) throw new NotFoundException("Lead not found");
+    const pendingCall = await this.prisma.callMessage.findFirst({
+      where: {
+        leadId: lead.id,
+        status: FollowUpStatus.PENDING,
+        lead: leadScope(user),
+      },
+      orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
+      include: { lead: { select: { id: true, stage: true } } },
+    });
+    return this.finishCompletion(
+      pendingCall ?? {
+        id: null,
+        leadId: lead.id,
+        contactMethod: dto.contactMethod,
+        description: null,
+        lead,
+      },
+      dto,
+      user,
+    );
+  }
+
+  private async finishCompletion(
+    existing: {
+      id: string | null;
+      leadId: string;
+      contactMethod: string;
+      description: string | null;
+      lead: { id: string; stage: LeadStage };
+    },
+    dto: CompleteCallMessageDto,
+    user: Actor,
+  ) {
     const notInterested = dto.responseAction === "Not Interested";
     if (notInterested) {
       if (!dto.lostReason?.trim()) {
@@ -257,14 +309,6 @@ export class CallsMessagesService {
         "The meeting date and time must be in the future.",
       );
     }
-    const existing = await this.prisma.callMessage.findFirst({
-      where: { id, lead: leadScope(user) },
-      include: { lead: { select: { id: true, stage: true } } },
-    });
-    if (!existing) throw new NotFoundException("Call or message task not found");
-    if (existing.status !== FollowUpStatus.PENDING) {
-      throw new BadRequestException("Only pending call tasks can be completed.");
-    }
     if (!canTransition(existing.lead.stage, nextStage)) {
       throw new BadRequestException(
         `Lead cannot move from ${existing.lead.stage} to ${nextStage}.`,
@@ -273,26 +317,41 @@ export class CallsMessagesService {
     return this.prisma.$transaction(async (tx) => {
       if (dto.scheduleMeeting && meetingAt) {
         await assertLeadHasNoOtherActiveWork(tx, existing.leadId, {
-          callMessageId: existing.id,
+          callMessageId: existing.id ?? undefined,
         });
       } else {
         await lockLeadActiveWork(tx, existing.leadId);
       }
-      const updated = await tx.callMessage.updateMany({
-        where: { id, status: FollowUpStatus.PENDING },
-        data: {
+      let callMessageId = existing.id;
+      const callMessageData = {
           status: FollowUpStatus.COMPLETED,
           description: dto.remarks?.trim() || existing.description,
           outcome: notInterested
             ? dto.lostReason!.trim()
             : dto.customerResponse!.trim(),
           completedAt: new Date(),
-        },
-      });
-      if (updated.count !== 1) {
-        throw new BadRequestException(
-          "This call task has already been completed.",
-        );
+      };
+      if (callMessageId) {
+        const updated = await tx.callMessage.updateMany({
+          where: { id: callMessageId, status: FollowUpStatus.PENDING },
+          data: callMessageData,
+        });
+        if (updated.count !== 1) {
+          throw new BadRequestException(
+            "This call task has already been completed.",
+          );
+        }
+      } else {
+        const callMessage = await tx.callMessage.create({
+          data: {
+            leadId: existing.leadId,
+            userId: user.sub,
+            contactMethod: existing.contactMethod,
+            dueAt: new Date(dto.contactDate),
+            ...callMessageData,
+          },
+        });
+        callMessageId = callMessage.id;
       }
 
       await tx.activity.create({
@@ -370,14 +429,14 @@ export class CallsMessagesService {
           where: {
             leadId: existing.leadId,
             status: FollowUpStatus.PENDING,
-            id: { not: id },
+            ...(callMessageId ? { id: { not: callMessageId } } : {}),
           },
           data: { status: FollowUpStatus.CANCELLED },
         });
       }
 
       return tx.callMessage.findUniqueOrThrow({
-        where: { id },
+        where: { id: callMessageId! },
         include: callMessageInclude,
       });
     });

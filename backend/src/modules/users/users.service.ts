@@ -24,6 +24,7 @@ export class UsersService {
         email: true,
         role: true,
         isActive: true,
+        isOnline: true,
         createdAt: true,
       },
     });
@@ -37,7 +38,9 @@ export class UsersService {
         email: true,
         role: true,
         isActive: true,
+        isOnline: true,
         createdAt: true,
+        lastActiveAt: true,
         managerId: true,
         manager: { select: { id: true, fullName: true } },
       },
@@ -75,7 +78,9 @@ export class UsersService {
           email: true,
           role: true,
           isActive: true,
+          isOnline: true,
           createdAt: true,
+          lastActiveAt: true,
           managerId: true,
           manager: { select: { id: true, fullName: true } },
           _count: { select: { leads: true, managedBdes: true } },
@@ -216,7 +221,7 @@ export class UsersService {
   ): Promise<Pick<User, "id" | "fullName" | "email" | "role" | "isActive">> {
     return this.prisma.user.update({
       where: { id },
-      data: { isActive },
+      data: { isActive, ...(isActive ? {} : { isOnline: false }) },
       select: {
         id: true,
         fullName: true,

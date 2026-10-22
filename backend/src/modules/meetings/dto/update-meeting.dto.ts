@@ -18,9 +18,8 @@ export class UpdateMeetingDto {
   ])
   type?: string;
 
-  @IsOptional() @IsString() participants?: string | null;
   @IsOptional() @IsString() requirement?: string | null;
-  @IsOptional() @IsNumber() @Min(0) budget?: number | null;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) budget?: number | null;
   @IsOptional() @IsString() discussionNotes?: string | null;
   @IsOptional() @IsString() customerConcerns?: string | null;
   @IsOptional() @IsString() nextAction?: string;

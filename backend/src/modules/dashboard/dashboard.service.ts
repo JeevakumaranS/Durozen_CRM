@@ -11,7 +11,13 @@ export class DashboardService {
   async pendingCounts(user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const lead = leadScope(user);
-    const [tasks, meetings, callsAndMessages] = await Promise.all([
+    const [
+      tasks,
+      meetings,
+      callsAndMessages,
+      proposals,
+      negotiations,
+    ] = await Promise.all([
       this.prisma.followUp.count({
         where: {
           status: "PENDING",
@@ -25,9 +31,15 @@ export class DashboardService {
       this.prisma.callMessage.count({
         where: { status: "PENDING", lead },
       }),
+      this.prisma.followUp.count({
+        where: { status: "PENDING", type: "Proposal Follow-up", lead },
+      }),
+      this.prisma.followUp.count({
+        where: { status: "PENDING", type: "Negotiation", lead },
+      }),
     ]);
 
-    return { tasks, meetings, callsAndMessages };
+    return { tasks, meetings, callsAndMessages, proposals, negotiations };
   }
 
   async summary(user: Actor) {

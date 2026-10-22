@@ -7,6 +7,7 @@ import { notify } from "../../lib/notifications";
 import { notifyLeadUpdated } from "../../lib/lead-events";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 import { LOST_REASONS } from "../leads/lost-reasons";
+import { ProposalCompletionFields } from "./proposal-completion-fields";
 import {
   BUSINESS_TIME_ZONE,
   businessDateKey,
@@ -67,6 +68,11 @@ const RESCHEDULE_REASONS = [
   "Customer unavailable",
   "BDE unavailable",
 ] as const;
+const WON_PAYMENT_STATUSES = [
+  "Advance Payment",
+  "Fully Paid",
+  "Not Paid",
+] as const;
 const PROPOSAL_TYPES = ["Proposal Follow-up"];
 const NEGOTIATION_TYPES = ["Negotiation"];
 const CONTACT_TYPES = [
@@ -108,6 +114,7 @@ export function ProposalWorkspace() {
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
   const [assignedBdeIds, setAssignedBdeIds] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<FollowUpStatus[]>([]);
+  const [pendingResponseOnly, setPendingResponseOnly] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [loading, setLoading] = useState(true);
@@ -137,6 +144,11 @@ export function ProposalWorkspace() {
   >("Negotiation");
   const [customerExpectedAmount, setCustomerExpectedAmount] = useState("");
   const [proposalLostReason, setProposalLostReason] = useState(LOST_REASONS[0]);
+  const [expectedTimeline, setExpectedTimeline] = useState("");
+  const [paymentStatus, setPaymentStatus] = useState<
+    "" | (typeof WON_PAYMENT_STATUSES)[number]
+  >("");
+  const [advanceAmount, setAdvanceAmount] = useState("");
   const [nextDueAt, setNextDueAt] = useState("");
   const [proposalFollowUpDate, setProposalFollowUpDate] = useState(
     businessDateKey(new Date(Date.now() + 86400000)),
@@ -185,6 +197,8 @@ export function ProposalWorkspace() {
     if (enabledFilters.assignee && assignedBdeIds.length)
       params.set("assignedBdeId", assignedBdeIds.join(","));
     if (statusFilters.length) params.set("status", statusFilters.join(","));
+    if (!isNegotiation && pendingResponseOnly)
+      params.set("pendingResponse", "true");
     if (enabledFilters.date && from) params.set("from", from);
     if (enabledFilters.date && to) params.set("to", to);
     try {
@@ -210,6 +224,7 @@ export function ProposalWorkspace() {
     from,
     itemPlural,
     isNegotiation,
+    pendingResponseOnly,
     statusFilters,
     to,
     typeFilters,
@@ -445,7 +460,13 @@ export function ProposalWorkspace() {
       ? responseItem?.lead.negotiations?.[0]
       : responseItem?.proposal;
     if (!responseItem || !responseTarget) return;
-    if (!proposalResponse.trim()) {
+    const requiresCustomerResponse =
+      isNegotiationResponse || proposalNextAction === "Negotiation";
+    if (
+      responseMode === "new" &&
+      requiresCustomerResponse &&
+      !proposalResponse.trim()
+    ) {
       notify("Enter the customer's response.", "error");
       return;
     }
@@ -464,6 +485,22 @@ export function ProposalWorkspace() {
       notify("Enter the customer's expected amount.", "error");
       return;
     }
+    if (
+      responseMode === "new" &&
+      proposalNextAction === "Won" &&
+      (!expectedTimeline.trim() ||
+        !paymentStatus ||
+        (paymentStatus === "Advance Payment" &&
+          (!advanceAmount ||
+            Number.isNaN(Number(advanceAmount)) ||
+            Number(advanceAmount) <= 0)))
+    ) {
+      notify(
+        "Enter the expected timeline and required payment details for a Won outcome.",
+        "error",
+      );
+      return;
+    }
     setBusy(true);
     try {
       const editingSavedResponse = responseMode === "edit";
@@ -472,7 +509,9 @@ export function ProposalWorkspace() {
         {
           method: "PATCH",
           body: JSON.stringify({
-            customerResponse: proposalResponse.trim(),
+            ...(proposalResponse.trim()
+              ? { customerResponse: proposalResponse.trim() }
+              : {}),
             ...(editingSavedResponse
               ? {}
               : {
@@ -486,6 +525,15 @@ export function ProposalWorkspace() {
                     proposalNextAction === "Lost"
                       ? proposalLostReason
                       : undefined,
+                  ...(proposalNextAction === "Won"
+                    ? {
+                        expectedTimeline: expectedTimeline.trim(),
+                        paymentStatus,
+                        ...(paymentStatus === "Advance Payment"
+                          ? { advanceAmount: Number(advanceAmount) }
+                          : {}),
+                      }
+                    : {}),
                 }),
           }),
         },
@@ -494,13 +542,18 @@ export function ProposalWorkspace() {
       notify(
         editingSavedResponse
           ? `${itemTitle} response updated.`
-          : `${itemTitle} response saved. Lead moved to ${proposalNextAction}.`,
+          : proposalResponse.trim()
+            ? `${itemTitle} response saved. Lead moved to ${proposalNextAction}.`
+            : `${itemTitle} marked ${proposalNextAction}.`,
       );
       setResponseItem(null);
       setProposalResponse("");
       setCustomerExpectedAmount("");
       setProposalNextAction("Negotiation");
       setProposalLostReason(LOST_REASONS[0]);
+      setExpectedTimeline("");
+      setPaymentStatus("");
+      setAdvanceAmount("");
       setResponseMode("new");
       await load();
     } catch (reason) {
@@ -533,6 +586,9 @@ export function ProposalWorkspace() {
     setProposalNextAction(item.type === "Negotiation" ? "" : "Negotiation");
     setCustomerExpectedAmount("");
     setProposalLostReason(LOST_REASONS[0]);
+    setExpectedTimeline("");
+    setPaymentStatus("");
+    setAdvanceAmount("");
   }
 
   function beginUpdate(item: FollowUp, status: FollowUpStatus) {
@@ -670,6 +726,21 @@ export function ProposalWorkspace() {
               )}
             </div>
             <div className="follow-up-filter-option">
+              {!isNegotiation && (
+                <label className="follow-up-filter-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={pendingResponseOnly}
+                    onChange={(event) => {
+                      resetPage();
+                      setPendingResponseOnly(event.target.checked);
+                    }}
+                  />
+                  Pending response
+                </label>
+              )}
+            </div>
+            <div className="follow-up-filter-option">
               {FOLLOW_UP_STATUSES.map((item) => (
                 <label className="follow-up-filter-checkbox" key={item}>
                   <input
@@ -743,6 +814,7 @@ export function ProposalWorkspace() {
             setTypeFilters([]);
             setAssignedBdeIds([]);
             setStatusFilters([]);
+            setPendingResponseOnly(false);
             setFrom("");
             setTo("");
           }}
@@ -903,7 +975,12 @@ export function ProposalWorkspace() {
               <div className="lead-form">
                 <label className="form-wide">
                   Customer response
-                  <textarea rows={3} readOnly value={proposalResponse} />
+                  <textarea
+                    rows={3}
+                    readOnly
+                    placeholder="No customer response was provided."
+                    value={proposalResponse}
+                  />
                 </label>
                 <div className="form-footer">
                   <p>
@@ -934,15 +1011,6 @@ export function ProposalWorkspace() {
               </div>
             ) : (
               <form className="lead-form" onSubmit={saveProposalResponse}>
-                <label className="form-wide">
-                  Customer response *
-                  <textarea
-                    required
-                    rows={3}
-                    value={proposalResponse}
-                    onChange={(event) => setProposalResponse(event.target.value)}
-                  />
-                </label>
                 {responseMode === "new" && (
                   <>
                     <label className="form-wide">
@@ -950,14 +1018,17 @@ export function ProposalWorkspace() {
                       <select
                         required
                         value={proposalNextAction}
-                        onChange={(event) =>
+                        onChange={(event) => {
                           setProposalNextAction(
                             event.target.value as
                               | "Negotiation"
                               | "Won"
                               | "Lost",
-                          )
-                        }
+                          );
+                          setExpectedTimeline("");
+                          setPaymentStatus("");
+                          setAdvanceAmount("");
+                        }}
                       >
                           {responseItem.type === "Negotiation" && (
                             <option value="">Choose outcome</option>
@@ -969,6 +1040,20 @@ export function ProposalWorkspace() {
                         <option value="Lost">Lost</option>
                       </select>
                     </label>
+                    {(responseItem.type === "Negotiation" ||
+                      proposalNextAction === "Negotiation") && (
+                      <label className="form-wide">
+                        Customer response *
+                        <textarea
+                          required
+                          rows={3}
+                          value={proposalResponse}
+                          onChange={(event) =>
+                            setProposalResponse(event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
                     {proposalNextAction === "Negotiation" && (
                       <label className="form-wide">
                         Customer expected amount (₹) *
@@ -1002,7 +1087,67 @@ export function ProposalWorkspace() {
                         </select>
                       </label>
                     )}
+                    {proposalNextAction === "Won" && (
+                      <>
+                        <label className="form-wide">
+                          Expected timeline *
+                          <input
+                            required
+                            value={expectedTimeline}
+                            onChange={(event) =>
+                              setExpectedTimeline(event.target.value)
+                            }
+                          />
+                        </label>
+                        <label className="form-wide">
+                          Payment status *
+                          <select
+                            required
+                            value={paymentStatus}
+                            onChange={(event) =>
+                              setPaymentStatus(
+                                event.target.value as
+                                  | ""
+                                  | (typeof WON_PAYMENT_STATUSES)[number],
+                              )
+                            }
+                          >
+                            <option value="">Choose payment status</option>
+                            {WON_PAYMENT_STATUSES.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {paymentStatus === "Advance Payment" && (
+                          <label className="form-wide">
+                            Advance amount (₹) *
+                            <input
+                              required
+                              min="0.01"
+                              step="0.01"
+                              type="number"
+                              value={advanceAmount}
+                              onChange={(event) =>
+                                setAdvanceAmount(event.target.value)
+                              }
+                            />
+                          </label>
+                        )}
+                      </>
+                    )}
                   </>
+                )}
+                {responseMode === "edit" && (
+                  <label className="form-wide">
+                    Customer response
+                    <textarea
+                      rows={3}
+                      value={proposalResponse}
+                      onChange={(event) => setProposalResponse(event.target.value)}
+                    />
+                  </label>
                 )}
                 <div className="form-footer">
                   <p>
@@ -1268,67 +1413,17 @@ export function ProposalWorkspace() {
                 </>
               ) : (
                 <>
-              <label>
-                Lead name
-                <input disabled value={completingItem.lead.customerName} />
-              </label>
-              <label>
-                Service / Product *
-                <input
-                  required
-                  value={serviceProduct}
-                  onChange={(event) => setServiceProduct(event.target.value)}
-                />
-              </label>
-              <label>
-                Proposal Amount (₹) *
-                <input
-                  required
-                  min="0"
-                  step="0.01"
-                  type="number"
-                  value={proposalAmount}
-                  onChange={(event) => setProposalAmount(event.target.value)}
-                />
-              </label>
-              <label>
-                Discount (₹)
-                <input
-                  min="0"
-                  step="0.01"
-                  type="number"
-                  value={discount}
-                  onChange={(event) => setDiscount(event.target.value)}
-                />
-              </label>
-              <label>
-                Final Amount (₹)
-                <input
-                  disabled
-                  value={
-                    proposalAmount
-                      ? formatCurrency(
-                          Math.max(
-                            Number(proposalAmount) - Number(discount || 0),
-                            0,
-                          ),
-                        )
-                      : ""
-                  }
-                />
-              </label>
-              <label className="form-wide">
-                Follow-up date *
-                <input
-                  required
-                  type="date"
-                  min={businessDateKey(new Date())}
-                  value={proposalFollowUpDate}
-                  onChange={(event) =>
-                    setProposalFollowUpDate(event.target.value)
-                  }
-                />
-              </label>
+              <ProposalCompletionFields
+                leadName={completingItem.lead.customerName}
+                serviceProduct={serviceProduct}
+                proposalAmount={proposalAmount}
+                discount={discount}
+                followUpDate={proposalFollowUpDate}
+                setServiceProduct={setServiceProduct}
+                setProposalAmount={setProposalAmount}
+                setDiscount={setDiscount}
+                setFollowUpDate={setProposalFollowUpDate}
+              />
               <div className="form-footer">
                 <p>
                   Saving records the proposal and updates the lead&apos;s next

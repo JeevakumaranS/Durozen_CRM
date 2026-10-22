@@ -6,7 +6,7 @@ export class CompleteMeetingDto {
   requirement!: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   budget?: number | null;
 

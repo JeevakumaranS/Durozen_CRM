@@ -7,6 +7,7 @@ import { notify } from "../../lib/notifications";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
 import { DateRangePicker } from "../../components/shared/date-range-picker";
 import { LOST_REASONS } from "../leads/lost-reasons";
+import { MeetingCompletionFields } from "./meeting-completion-fields";
 import {
   businessDateKey,
   businessDateTimeInputValue,
@@ -36,7 +37,6 @@ type Meeting = {
   status: MeetingStatus;
   completedAt?: string | null;
   type: string;
-  participants?: string | null;
   requirement?: string | null;
   budget?: string | number | null;
   discussionNotes?: string | null;
@@ -64,7 +64,6 @@ type MeetingForm = {
   leadId: string;
   meetingAt: string;
   type: string;
-  participants: string;
   requirement: string;
   budget: string;
   discussionNotes: string;
@@ -89,7 +88,6 @@ const emptyForm = (): MeetingForm => ({
   leadId: "",
   meetingAt: "",
   type: TYPES[0],
-  participants: "",
   requirement: "",
   budget: "",
   discussionNotes: "",
@@ -103,6 +101,18 @@ const localDateTime = (value?: string) =>
 const dateValue = businessDateTimeToIso;
 const displayValue = (value?: string | number | null) =>
   value === null || value === undefined || value === "" ? "—" : String(value);
+const formatBudget = (value?: string | number | null) => {
+  if (value === null || value === undefined || value === "") return "—";
+  const amount = Number(value);
+  return Number.isFinite(amount)
+    ? new Intl.NumberFormat("en-IN", {
+        style: "currency",
+        currency: "INR",
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount)
+    : String(value);
+};
 
 export function MeetingWorkspace() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
@@ -213,7 +223,6 @@ export function MeetingWorkspace() {
       leadId: meeting.leadId,
       meetingAt: localDateTime(meeting.meetingAt),
       type: meeting.type,
-      participants: meeting.participants ?? "",
       requirement: meeting.requirement ?? "",
       budget: meeting.budget === null ? "" : String(meeting.budget ?? ""),
       discussionNotes: meeting.discussionNotes ?? "",
@@ -246,7 +255,6 @@ export function MeetingWorkspace() {
       ...(editing ? {} : { leadId: form.leadId }),
       ...(editing ? {} : { meetingAt: dateValue(form.meetingAt) }),
       type: form.type,
-      participants: form.participants || (editing ? null : undefined),
       requirement: form.requirement || (editing ? null : undefined),
       ...(editing
         ? {
@@ -467,8 +475,8 @@ export function MeetingWorkspace() {
           </p>
         </div>
         <div className="workspace-actions">
-          <Link className="secondary-action" href="/pipeline">
-            Sales Pipeline
+          <Link className="secondary-action" href="/leads">
+            Leads
           </Link>
           <button
             className="secondary-action"
@@ -796,22 +804,13 @@ export function MeetingWorkspace() {
                   ))}
                 </select>
               </label>
-              <label>
-                Participants
-                <input
-                  value={form.participants}
-                  onChange={(event) =>
-                    setForm({ ...form, participants: event.target.value })
-                  }
-                />
-              </label>
               {editing && (
                 <label>
                   Budget (₹)
                   <input
                     type="number"
                     min="0"
-                    step="any"
+                    step="0.01"
                     value={form.budget}
                     onChange={(event) =>
                       setForm({ ...form, budget: event.target.value })
@@ -997,97 +996,22 @@ export function MeetingWorkspace() {
               </button>
             </div>
             <form className="lead-form" onSubmit={completeMeeting}>
-              <label className="form-wide">
-                Requirement *
-                <textarea
-                  required
-                  rows={2}
-                  value={completionRequirement}
-                  onChange={(event) =>
-                    setCompletionRequirement(event.target.value)
-                  }
-                />
-              </label>
-              <label>
-                Budget (₹)
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={completionBudget}
-                  onChange={(event) =>
-                    setCompletionBudget(event.target.value)
-                  }
-                />
-              </label>
-              <label className="form-wide">
-                Discussion notes
-                <textarea
-                  rows={3}
-                  value={completionDiscussionNotes}
-                  onChange={(event) =>
-                    setCompletionDiscussionNotes(event.target.value)
-                  }
-                />
-              </label>
-              <label className="form-wide">
-                Next action *
-                <select
-                  required
-                  value={completionNextAction}
-                  onChange={(event) => {
-                    setCompletionNextAction(event.target.value);
-                    setCompletionFollowUpAt("");
-                    setCompletionLostReason(LOST_REASONS[0]);
-                    setCompletionOtherLostReason("");
-                  }}
-                >
-                  <option value="">Choose next action</option>
-                  <option value="Proposal">Proposal</option>
-                  <option value="Lost">Lost</option>
-                </select>
-              </label>
-              {completionNextAction === "Proposal" && (
-                <ClockDateTimePicker
-                  className="form-wide"
-                  label="Next follow-up date"
-                  required
-                  minValue={businessDateTimeInputValue(new Date())}
-                  value={completionFollowUpAt}
-                  onChange={setCompletionFollowUpAt}
-                />
-              )}
-              {completionNextAction === "Lost" && (
-                <>
-                  <label className="form-wide">
-                    Lost reason *
-                    <select
-                      required
-                      value={completionLostReason}
-                      onChange={(event) => {
-                        setCompletionLostReason(event.target.value);
-                        setCompletionOtherLostReason("");
-                      }}
-                    >
-                      {LOST_REASONS.map((reason) => (
-                        <option key={reason}>{reason}</option>
-                      ))}
-                    </select>
-                  </label>
-                  {completionLostReason === "Other" && (
-                    <label className="form-wide">
-                      Other reason *
-                      <input
-                        required
-                        value={completionOtherLostReason}
-                        onChange={(event) =>
-                          setCompletionOtherLostReason(event.target.value)
-                        }
-                      />
-                    </label>
-                  )}
-                </>
-              )}
+              <MeetingCompletionFields
+                requirement={completionRequirement}
+                budget={completionBudget}
+                discussionNotes={completionDiscussionNotes}
+                nextAction={completionNextAction}
+                followUpAt={completionFollowUpAt}
+                lostReason={completionLostReason}
+                otherLostReason={completionOtherLostReason}
+                setRequirement={setCompletionRequirement}
+                setBudget={setCompletionBudget}
+                setDiscussionNotes={setCompletionDiscussionNotes}
+                setNextAction={setCompletionNextAction}
+                setFollowUpAt={setCompletionFollowUpAt}
+                setLostReason={setCompletionLostReason}
+                setOtherLostReason={setCompletionOtherLostReason}
+              />
               <div className="form-footer">
                 <p>
                   Choosing Proposal creates a follow-up in Activities.
@@ -1168,8 +1092,7 @@ export function MeetingWorkspace() {
               <div><dt>Type</dt><dd>{viewing.type}</dd></div>
               <div><dt>Lead stage</dt><dd>{viewing.lead.stage.replaceAll("_", " ")}</dd></div>
               <div><dt>Assigned BDE</dt><dd>{viewing.lead.assignedBde.fullName}</dd></div>
-              <div><dt>Participants</dt><dd>{displayValue(viewing.participants)}</dd></div>
-              <div><dt>Budget</dt><dd>{displayValue(viewing.budget)}</dd></div>
+              <div><dt>Budget</dt><dd>{formatBudget(viewing.budget)}</dd></div>
               <div className="meeting-detail-wide"><dt>Purpose / agenda</dt><dd>{displayValue(viewing.requirement)}</dd></div>
               <div className="meeting-detail-wide"><dt>Discussion notes</dt><dd>{displayValue(viewing.discussionNotes)}</dd></div>
               <div className="meeting-detail-wide"><dt>Customer concerns</dt><dd>{displayValue(viewing.customerConcerns)}</dd></div>

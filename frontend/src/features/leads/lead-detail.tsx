@@ -6,12 +6,7 @@ import { useParams } from "next/navigation";
 import { apiClient } from "../../lib/api-client";
 import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { notify } from "../../lib/notifications";
-import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
-import {
-  businessDateTimeToIso,
-  formatBusinessDateTime,
-  formatEmbeddedDateTimes,
-} from "../../lib/business-time";
+import { formatBusinessDateTime, formatEmbeddedDateTimes } from "../../lib/business-time";
 
 type Activity = {
   id: string;
@@ -25,6 +20,10 @@ type Activity = {
   expectedTimeline?: string | null;
   requirement?: string | null;
   estimatedBudget?: string | number | null;
+  paymentAmount?: string | number | null;
+  paymentStatus?: string | null;
+  paymentTotal?: string | number | null;
+  paymentBalance?: string | number | null;
   remarks?: string | null;
   followUpAt?: string | null;
   createdAt: string;
@@ -36,7 +35,6 @@ type LeadDetails = {
   leadDate: string;
   customerName: string;
   businessName?: string | null;
-  businessCategory?: string | null;
   mobileNumber: string;
   email?: string | null;
   location?: string | null;
@@ -46,9 +44,8 @@ type LeadDetails = {
   wonService?: string | null;
   paymentStatus?: string | null;
   advanceAmount?: string | number | null;
+  paidAmount?: string | number | null;
   confirmedAt?: string | null;
-  expectedStartDate?: string | null;
-  wonRemarks?: string | null;
   leadSource: string;
   priority: string;
   stage: string;
@@ -58,14 +55,20 @@ type LeadDetails = {
   stageEnteredAt: string;
   assignedBde: { fullName: string };
   activities: Activity[];
+  negotiations?: {
+    expectedTimeline?: string | null;
+    customerConcern?: string | null;
+  }[];
 };
 
-const activityTypes = [
-  "Meeting",
-  "Proposal",
-  "Negotiation",
-];
 const dateTime = formatBusinessDateTime;
+const currency = (value: number) =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 const leadDate = (value: string) =>
   new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
@@ -75,16 +78,35 @@ export function LeadDetail() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const [lead, setLead] = useState<LeadDetails | null>(null);
-  const [type, setType] = useState("Meeting");
-  const [description, setDescription] = useState("");
-  const [outcome, setOutcome] = useState("");
-  const [nextAction, setNextAction] = useState("");
-  const [followUpAt, setFollowUpAt] = useState("");
-  const [busy, setBusy] = useState(false);
   const [expandedActivityId, setExpandedActivityId] = useState<string | null>(
     null,
   );
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [savingPayment, setSavingPayment] = useState(false);
   const timelineActivities = lead?.activities ?? [];
+  const finalDealValue =
+    Math.round(Number(lead?.finalDealValue ?? 0) * 100) / 100;
+  const paidAmount =
+    Math.round(
+      Number(
+        lead?.paidAmount ??
+          (lead?.paymentStatus === "Fully Paid"
+            ? finalDealValue
+            : lead?.advanceAmount ?? 0),
+      ) * 100,
+    ) / 100;
+  const remainingBalance =
+    Math.max(0, Math.round((finalDealValue - paidAmount) * 100) / 100);
+  const paymentAmountNumber = Number(paymentAmount);
+  const paymentPreviewStatus =
+    paymentAmountNumber <= 0 || paymentAmountNumber > remainingBalance
+      ? ""
+      : paymentAmountNumber >= remainingBalance
+        ? "Fully Paid"
+        : paidAmount === 0
+          ? "Advance Payment"
+          : "Partial Payment";
 
   const load = useCallback(async () => {
     try {
@@ -101,6 +123,36 @@ export function LeadDetail() {
     if (id) void load();
   }, [id, load]);
 
+  async function recordPayment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (
+      !Number.isFinite(paymentAmountNumber) ||
+      paymentAmountNumber <= 0 ||
+      paymentAmountNumber > remainingBalance
+    ) {
+      notify("Enter a payment amount no greater than the remaining balance.", "error");
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      await apiClient(`/leads/${id}/payments`, {
+        method: "POST",
+        body: JSON.stringify({ amount: paymentAmountNumber }),
+      });
+      setPaymentAmount("");
+      setShowPaymentForm(false);
+      notify("Payment logged to the activity timeline.");
+      await load();
+    } catch (error) {
+      notify(
+        error instanceof Error ? error.message : "Unable to log payment.",
+        "error",
+      );
+    } finally {
+      setSavingPayment(false);
+    }
+  }
+
   useEffect(() => {
     const refreshLead = (event: Event) => {
       const { leadId } = (event as CustomEvent<{ leadId: string }>).detail;
@@ -109,44 +161,6 @@ export function LeadDetail() {
     window.addEventListener(LEAD_UPDATED_EVENT, refreshLead);
     return () => window.removeEventListener(LEAD_UPDATED_EVENT, refreshLead);
   }, [id, load]);
-
-  async function addActivity(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!nextAction.trim()) {
-      notify("Enter the next action before adding an activity.", "error");
-      return;
-    }
-    if (!followUpAt) {
-      notify("Choose a next follow-up date and time.", "error");
-      return;
-    }
-    setBusy(true);
-    try {
-      await apiClient<Activity>(`/leads/${id}/activities`, {
-        method: "POST",
-        body: JSON.stringify({
-          type,
-          description,
-          outcome: outcome || undefined,
-          nextAction: nextAction.trim(),
-          followUpAt: businessDateTimeToIso(followUpAt),
-        }),
-      });
-      setDescription("");
-      setOutcome("");
-      setNextAction("");
-      setFollowUpAt("");
-      notify("Activity added to the lead timeline.");
-      await load();
-    } catch (error) {
-      notify(
-        error instanceof Error ? error.message : "Unable to add activity.",
-        "error",
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const stageAge = lead
     ? Math.max(
@@ -176,9 +190,7 @@ export function LeadDetail() {
           <p className="eyebrow">{lead.leadNumber}</p>
           <h1>{lead.customerName}</h1>
           <p className="subtitle">
-            {lead.businessName ||
-              lead.businessCategory ||
-              "Prospective customer"}{" "}
+            {lead.businessName || "Prospective customer"}{" "}
             · {lead.mobileNumber}
           </p>
         </div>
@@ -190,23 +202,60 @@ export function LeadDetail() {
         <section className="panel detail-main">
           <div className="detail-section-heading">
             <div>
-              <h2>Next action</h2>
-              <p>Every active opportunity needs a dated next step.</p>
+              <h2>{lead.stage === "WON" ? "Deal summary" : "Next action"}</h2>
+              <p>
+                {lead.stage === "WON"
+                  ? "Customer requirement and expected timeline."
+                  : "Every active opportunity needs a dated next step."}
+              </p>
             </div>
           </div>
-          <div className="next-action-box">
-            <strong>{lead.nextAction || "No next action set"}</strong>
-            <span>
-              {lead.followUpAt
-                ? `Due ${dateTime(lead.followUpAt)}`
-                : "No follow-up scheduled"}
-            </span>
-          </div>
+          {lead.stage === "WON" ? (
+            <dl className="next-action-box">
+              <div>
+                <dt>Customer requirement</dt>
+                <dd>
+                  {lead.requirement ||
+                    lead.negotiations?.[0]?.customerConcern ||
+                    "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Expected timeline</dt>
+                <dd>{lead.negotiations?.[0]?.expectedTimeline || "—"}</dd>
+              </div>
+            </dl>
+          ) : (
+            <div className="next-action-box">
+              <strong>{lead.nextAction || "No next action set"}</strong>
+              <span>
+                {lead.followUpAt
+                  ? `Due ${dateTime(lead.followUpAt)}`
+                  : "No follow-up scheduled"}
+              </span>
+            </div>
+          )}
           <div className="detail-section-heading timeline-heading">
-            <div>
+            <div className="timeline-heading-copy">
               <h2>Activity timeline</h2>
-              <p>Customer interactions and updates, newest first.</p>
+              <p>
+                {lead.stage === "WON"
+                  ? `Paid ${currency(paidAmount)} of ${currency(finalDealValue)}; balance ${currency(remainingBalance)}.`
+                  : "Customer interactions and updates, newest first."}
+              </p>
             </div>
+            {lead.stage === "WON" && remainingBalance > 0 && (
+              <button
+                className="primary"
+                type="button"
+                onClick={() => {
+                  setPaymentAmount("");
+                  setShowPaymentForm(true);
+                }}
+              >
+                Log payment
+              </button>
+            )}
           </div>
           <div className="activity-timeline">
             {timelineActivities.map((activity) => (
@@ -276,13 +325,43 @@ export function LeadDetail() {
                         activity.estimatedBudget !== undefined && (
                           <div>
                             <dt>Estimated budget</dt>
-                            <dd>
-                              ₹
-                              {Number(activity.estimatedBudget).toLocaleString(
-                                "en-IN",
-                              )}
-                            </dd>
+                            <dd>{currency(Number(activity.estimatedBudget))}</dd>
                           </div>
+                        )}
+                      {activity.paymentAmount !== null &&
+                        activity.paymentAmount !== undefined && (
+                          <>
+                            <div>
+                              <dt>Payment received</dt>
+                              <dd>
+                                {currency(Number(activity.paymentAmount))}
+                              </dd>
+                            </div>
+                            {activity.paymentStatus && (
+                              <div>
+                                <dt>Payment status</dt>
+                                <dd>{activity.paymentStatus}</dd>
+                              </div>
+                            )}
+                            {activity.paymentTotal !== null &&
+                              activity.paymentTotal !== undefined && (
+                                <div>
+                                  <dt>Total paid</dt>
+                                  <dd>
+                                    {currency(Number(activity.paymentTotal))}
+                                  </dd>
+                                </div>
+                              )}
+                            {activity.paymentBalance !== null &&
+                              activity.paymentBalance !== undefined && (
+                                <div>
+                                  <dt>Remaining balance</dt>
+                                  <dd>
+                                    {currency(Number(activity.paymentBalance))}
+                                  </dd>
+                                </div>
+                              )}
+                          </>
                         )}
                       {activity.expectedTimeline && (
                         <div>
@@ -370,7 +449,7 @@ export function LeadDetail() {
                 <dt>Estimated budget</dt>
                 <dd>
                   {lead.estimatedBudget
-                    ? `₹${Number(lead.estimatedBudget).toLocaleString("en-IN")}`
+                    ? currency(Number(lead.estimatedBudget))
                     : "—"}
                 </dd>
               </div>
@@ -384,7 +463,7 @@ export function LeadDetail() {
                     <dt>Final deal value</dt>
                     <dd>
                       {lead.finalDealValue
-                        ? `₹${Number(lead.finalDealValue).toLocaleString("en-IN")}`
+                        ? currency(Number(lead.finalDealValue))
                         : "—"}
                     </dd>
                   </div>
@@ -397,7 +476,7 @@ export function LeadDetail() {
                     <dd>
                       {lead.advanceAmount == null
                         ? "—"
-                        : `₹${Number(lead.advanceAmount).toLocaleString("en-IN")}`}
+                        : currency(Number(lead.advanceAmount))}
                     </dd>
                   </div>
                   <div>
@@ -405,18 +484,6 @@ export function LeadDetail() {
                     <dd>
                       {lead.confirmedAt ? dateTime(lead.confirmedAt) : "—"}
                     </dd>
-                  </div>
-                  <div>
-                    <dt>Expected start</dt>
-                    <dd>
-                      {lead.expectedStartDate
-                        ? dateTime(lead.expectedStartDate)
-                        : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Deal remarks</dt>
-                    <dd>{lead.wonRemarks || "—"}</dd>
                   </div>
                 </>
               )}
@@ -428,58 +495,102 @@ export function LeadDetail() {
               </div>
             </dl>
           </section>
-          <section className="panel activity-form-panel">
-            <h2>Log an activity</h2>
-            <form onSubmit={addActivity} className="activity-form">
-              <label>
-                Activity type
-                <select
-                  value={type}
-                  onChange={(event) => setType(event.target.value)}
-                >
-                  {activityTypes.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Description
-                <textarea
-                  required
-                  rows={3}
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                />
-              </label>
-              <label>
-                Outcome
-                <input
-                  value={outcome}
-                  onChange={(event) => setOutcome(event.target.value)}
-                />
-              </label>
-              <label>
-                Next action *
-                <input
-                  required
-                  value={nextAction}
-                  onChange={(event) => setNextAction(event.target.value)}
-                />
-              </label>
-              <ClockDateTimePicker
-                className="form-wide"
-                label="Next follow-up"
-                required
-                value={followUpAt}
-                onChange={setFollowUpAt}
-              />
-              <button className="primary" disabled={busy}>
-                {busy ? "Saving..." : "Add activity"}
-              </button>
-            </form>
-          </section>
         </aside>
       </div>
+      {showPaymentForm && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setShowPaymentForm(false);
+          }}
+        >
+          <section
+            className="lead-modal payment-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="log-payment-title"
+          >
+            <div className="modal-heading">
+              <div>
+                <p className="eyebrow">WON DEAL PAYMENT</p>
+                <h2 id="log-payment-title">Log payment</h2>
+              </div>
+              <button
+                className="modal-close"
+                type="button"
+                aria-label="Close"
+                onClick={() => setShowPaymentForm(false)}
+              >
+                ×
+              </button>
+            </div>
+            <form className="lead-form payment-form" onSubmit={recordPayment}>
+              <dl className="form-wide payment-balance-summary">
+                <div>
+                  <dt>Final deal value</dt>
+                  <dd>{currency(finalDealValue)}</dd>
+                </div>
+                <div>
+                  <dt>Already paid</dt>
+                  <dd>{currency(paidAmount)}</dd>
+                </div>
+                <div>
+                  <dt>Remaining balance</dt>
+                  <dd>{currency(remainingBalance)}</dd>
+                </div>
+              </dl>
+              <label className="form-wide">
+                Payment received
+                <span className="payment-input">
+                  <span>₹</span>
+                  <input
+                    autoFocus
+                    required
+                    min="0.01"
+                    max={remainingBalance}
+                    step="0.01"
+                    type="number"
+                    value={paymentAmount}
+                    onChange={(event) => setPaymentAmount(event.target.value)}
+                    placeholder="Enter amount"
+                  />
+                </span>
+              </label>
+              <div className="form-wide payment-status-preview">
+                <span>Payment status after this entry</span>
+                <strong
+                  className={
+                    paymentPreviewStatus === "Fully Paid" ? "is-fully-paid" : ""
+                  }
+                >
+                  {paymentPreviewStatus ||
+                    "Enter an amount within the remaining balance"}
+                </strong>
+              </div>
+              <div className="form-footer">
+                <p>
+                  Payment status and balance are calculated from the final deal
+                  value.
+                </p>
+                <div>
+                  <button
+                    className="secondary-action"
+                    disabled={savingPayment}
+                    type="button"
+                    onClick={() => setShowPaymentForm(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button className="primary" disabled={savingPayment}>
+                    {savingPayment ? "Saving..." : "Save payment"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

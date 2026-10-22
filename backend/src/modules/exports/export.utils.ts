@@ -131,13 +131,12 @@ const definitions: Record<string, ReportColumn[]> = {
     ),
   ],
   proposals: [
-    column("proposalNumber", "Proposal Number", 1),
+    column("lead.leadNumber", "Lead Number", 1),
     column("lead.customerName", "Lead / Company", 1.2),
     leadBde,
     column("proposalDate", "Proposal Date", 1, "date"),
     column("finalAmount", "Proposal Value", 1, "money"),
     column("customerResponse", "Status / Response", 1.2),
-    column("validityUntil", "Valid Until", 1, "date"),
   ],
   "won-lost": [
     leadName,

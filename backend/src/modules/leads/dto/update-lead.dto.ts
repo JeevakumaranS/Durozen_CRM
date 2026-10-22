@@ -19,7 +19,6 @@ export class UpdateLeadDto {
   @IsOptional() @Matches(/^[+0-9() -]{7,30}$/) mobileNumber?: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() location?: string;
-  @IsOptional() @IsString() businessCategory?: string;
   @IsOptional() @IsString() leadSource?: string;
   @IsOptional() @IsUUID() assignedBdeId?: string;
   @IsOptional() @IsEnum(LeadStage) stage?: LeadStage;
@@ -31,9 +30,9 @@ export class UpdateLeadDto {
     | "HOT"
     | "WARM"
     | "COLD";
-  @IsOptional() @IsNumber() @Min(0) estimatedBudget?: number | null;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) estimatedBudget?: number | null;
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   finalDealValue?: number;
 
@@ -46,12 +45,9 @@ export class UpdateLeadDto {
   paymentStatus?: string;
 
   @IsOptional()
-  @IsDateString()
-  expectedStartDate?: string;
-
-  @IsOptional()
-  @IsString()
-  wonRemarks?: string;
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  advanceAmount?: number;
 
   @IsOptional()
   @IsString()

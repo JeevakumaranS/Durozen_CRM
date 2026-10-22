@@ -17,7 +17,7 @@ import { PdfExportService } from "./pdf.service";
 
 @Controller("exports")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMIN", "SALES_MANAGER")
+@Roles("ADMIN")
 export class ExportsController {
   constructor(
     private readonly reports: ReportsService,

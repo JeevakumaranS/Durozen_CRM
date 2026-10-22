@@ -68,15 +68,14 @@ const fixtures: Record<string, Record<string, unknown>> = {
     remarks: longText,
   },
   proposals: {
-    proposalNumber: "P-100",
     lead: {
+      leadNumber: "LD-2026-100",
       customerName: "Asha Rao",
       assignedBde: { fullName: "BDE One" },
     },
     proposalDate: date,
     finalAmount: "12500.50",
     customerResponse: "PENDING",
-    validityUntil: date,
   },
   "won-lost": {
     customerName: "Asha Rao",

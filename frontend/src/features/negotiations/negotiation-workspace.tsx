@@ -39,10 +39,6 @@ type FollowUp = {
     originalProposalAmount?: number | string | null;
     customerExpectedAmount?: number | string | null;
     negotiatedAmount?: number | string | null;
-    expectedTimeline?: string | null;
-    confirmedAt?: string | null;
-    paymentStatus?: string | null;
-    advanceAmount?: number | string | null;
   } | null;
   lead: {
     id: string;
@@ -77,13 +73,13 @@ const RESCHEDULE_REASONS = [
   "Customer unavailable",
   "BDE unavailable",
 ] as const;
+const NEGOTIATION_PAYMENT_STATUSES = [
+  "Advance Payment",
+  "Fully Paid",
+  "Not Paid",
+] as const;
 const PROPOSAL_TYPES = ["Proposal Follow-up"];
 const NEGOTIATION_TYPES = ["Negotiation"];
-const NEGOTIATION_PAYMENT_STATUSES = [
-  "Advance Amount",
-  "Not Paid",
-  "Fully Paid",
-] as const;
 const businessInputValue = businessDateTimeInputValue;
 const businessDateTimeIso = businessDateTimeToIso;
 const formatDate = formatBusinessDateTime;
@@ -116,6 +112,7 @@ export function NegotiationWorkspace() {
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
   const [assignedBdeIds, setAssignedBdeIds] = useState<string[]>([]);
   const [statusFilters, setStatusFilters] = useState<FollowUpStatus[]>([]);
+  const [pendingResponseOnly, setPendingResponseOnly] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [loading, setLoading] = useState(true);
@@ -145,6 +142,12 @@ export function NegotiationWorkspace() {
   >("Negotiation");
   const [customerExpectedAmount, setCustomerExpectedAmount] = useState("");
   const [proposalLostReason, setProposalLostReason] = useState(LOST_REASONS[0]);
+  const [negotiationExpectedTimeline, setNegotiationExpectedTimeline] =
+    useState("");
+  const [negotiationPaymentStatus, setNegotiationPaymentStatus] = useState<
+    "" | (typeof NEGOTIATION_PAYMENT_STATUSES)[number]
+  >("");
+  const [negotiationAdvanceAmount, setNegotiationAdvanceAmount] = useState("");
   const [nextDueAt, setNextDueAt] = useState("");
   const [proposalFollowUpDate, setProposalFollowUpDate] = useState(
     businessDateKey(new Date(Date.now() + 86400000)),
@@ -154,21 +157,7 @@ export function NegotiationWorkspace() {
   const [serviceProduct, setServiceProduct] = useState("");
   const [proposalAmount, setProposalAmount] = useState("");
   const [discount, setDiscount] = useState("");
-  const [negotiationOutcome, setNegotiationOutcome] = useState<
-    "" | "Won" | "Lost"
-  >("");
   const [negotiatedAmount, setNegotiatedAmount] = useState("");
-  const [expectedTimeline, setExpectedTimeline] = useState("");
-  const [confirmedDate, setConfirmedDate] = useState(
-    businessDateKey(new Date()),
-  );
-  const [negotiationPaymentStatus, setNegotiationPaymentStatus] = useState<
-    "" | (typeof NEGOTIATION_PAYMENT_STATUSES)[number]
-  >("");
-  const [advanceAmount, setAdvanceAmount] = useState("");
-  const [negotiationLostReason, setNegotiationLostReason] = useState(
-    LOST_REASONS[0],
-  );
   const [customerResponse, setCustomerResponse] = useState("");
   const [rescheduleReason, setRescheduleReason] =
     useState<(typeof RESCHEDULE_REASONS)[number]>("Customer requested");
@@ -204,6 +193,7 @@ export function NegotiationWorkspace() {
     if (enabledFilters.assignee && assignedBdeIds.length)
       params.set("assignedBdeId", assignedBdeIds.join(","));
     if (statusFilters.length) params.set("status", statusFilters.join(","));
+    if (pendingResponseOnly) params.set("pendingResponse", "true");
     if (enabledFilters.date && from) params.set("from", from);
     if (enabledFilters.date && to) params.set("to", to);
     try {
@@ -229,6 +219,7 @@ export function NegotiationWorkspace() {
     from,
     itemPlural,
     isNegotiation,
+    pendingResponseOnly,
     statusFilters,
     to,
     typeFilters,
@@ -335,24 +326,14 @@ export function NegotiationWorkspace() {
     if (completing) {
       if (
         negotiationCompletion
-          ? !negotiationOutcome ||
-            negotiatedAmount === "" ||
+          ? negotiatedAmount === "" ||
             Number.isNaN(Number(negotiatedAmount)) ||
-            Number(negotiatedAmount) < 0 ||
-            (negotiationOutcome === "Lost" && !negotiationLostReason.trim()) ||
-            (negotiationOutcome === "Won" &&
-              (!expectedTimeline.trim() ||
-                !confirmedDate ||
-                !negotiationPaymentStatus ||
-                (negotiationPaymentStatus === "Advance Amount" &&
-                  (!advanceAmount ||
-                    Number.isNaN(Number(advanceAmount)) ||
-                    Number(advanceAmount) <= 0))))
+            Number(negotiatedAmount) < 0
           : !serviceProduct.trim() || !proposalAmount || !proposalFollowUpDate
       ) {
         notify(
           negotiationCompletion
-            ? "Enter the negotiated amount and all details required for the selected Won or Lost outcome."
+            ? "Enter the negotiated amount and next follow-up date."
             : "Enter the service or product, proposal amount, and follow-up date.",
           "error",
         );
@@ -388,9 +369,7 @@ export function NegotiationWorkspace() {
         method: "PATCH",
         body: JSON.stringify({
           status: editing.status,
-          dueAt: negotiationCompletion
-            ? undefined
-            : completing
+          dueAt: completing
             ? isNegotiation || item.type === "Negotiation"
               ? businessDateTimeIso(nextDueAt)
               : businessDateTimeIso(`${proposalFollowUpDate}T00:00`)
@@ -398,7 +377,7 @@ export function NegotiationWorkspace() {
               ? businessDateTimeIso(nextDueAt)
               : undefined,
           nextAction: negotiationCompletion
-            ? negotiationOutcome
+            ? "Follow up on negotiation"
             : completing
             ? isNegotiation || item.type === "Negotiation"
               ? nextActionText.trim()
@@ -423,20 +402,8 @@ export function NegotiationWorkspace() {
             : {}),
           ...(negotiationCompletion
             ? {
-                nextStage: negotiationOutcome === "Won" ? "WON" : "LOST",
+                nextStage: "NEGOTIATION",
                 negotiatedAmount: Number(negotiatedAmount),
-                ...(negotiationOutcome === "Lost"
-                  ? { lostReason: negotiationLostReason }
-                  : {
-                      expectedTimeline: expectedTimeline.trim(),
-                      confirmedAt: businessDateTimeIso(
-                        `${confirmedDate}T00:00`,
-                      ),
-                      paymentStatus: negotiationPaymentStatus,
-                      ...(negotiationPaymentStatus === "Advance Amount"
-                        ? { advanceAmount: Number(advanceAmount) }
-                        : {}),
-                    }),
               }
             : {}),
         }),
@@ -451,19 +418,13 @@ export function NegotiationWorkspace() {
       setProposalAmount("");
       setDiscount("");
       setCustomerResponse("");
-      setNegotiationOutcome("");
       setNegotiatedAmount("");
-      setExpectedTimeline("");
-      setConfirmedDate(businessDateKey(new Date()));
-      setNegotiationPaymentStatus("");
-      setAdvanceAmount("");
-      setNegotiationLostReason(LOST_REASONS[0]);
       setRescheduleReason("Customer requested");
       setPage(1);
       notify(
         nextStatus === "COMPLETED"
           ? isNegotiation || completingItem?.type === "Negotiation"
-            ? `Negotiation marked ${negotiationOutcome}.`
+            ? "Negotiation task marked completed."
             : `Proposal prepared and ${itemLabel} completed.`
           : `${itemTitle} rescheduled with one successor action.`,
       );
@@ -487,7 +448,12 @@ export function NegotiationWorkspace() {
       ? responseItem?.lead.negotiations?.[0]
       : responseItem?.proposal;
     if (!responseItem || !responseTarget) return;
-    if (!proposalResponse.trim()) {
+    if (
+      responseMode === "new" &&
+      !isNegotiationResponse &&
+      proposalNextAction === "Negotiation" &&
+      !proposalResponse.trim()
+    ) {
       notify("Enter the customer's response.", "error");
       return;
     }
@@ -506,6 +472,23 @@ export function NegotiationWorkspace() {
       notify("Enter the customer's expected amount.", "error");
       return;
     }
+    if (
+      isNegotiationResponse &&
+      responseMode === "new" &&
+      proposalNextAction === "Won" &&
+      (!negotiationExpectedTimeline.trim() ||
+        !negotiationPaymentStatus ||
+        (negotiationPaymentStatus === "Advance Payment" &&
+          (!negotiationAdvanceAmount ||
+            Number.isNaN(Number(negotiationAdvanceAmount)) ||
+            Number(negotiationAdvanceAmount) <= 0)))
+    ) {
+      notify(
+        "Enter the expected timeline and required payment details for a Won outcome.",
+        "error",
+      );
+      return;
+    }
     setBusy(true);
     try {
       const editingSavedResponse = responseMode === "edit";
@@ -514,7 +497,9 @@ export function NegotiationWorkspace() {
         {
           method: "PATCH",
           body: JSON.stringify({
-            customerResponse: proposalResponse.trim(),
+            ...(proposalResponse.trim()
+              ? { customerResponse: proposalResponse.trim() }
+              : {}),
             ...(editingSavedResponse
               ? {}
               : {
@@ -528,6 +513,17 @@ export function NegotiationWorkspace() {
                     proposalNextAction === "Lost"
                       ? proposalLostReason
                       : undefined,
+                  ...(isNegotiationResponse && proposalNextAction === "Won"
+                    ? {
+                        expectedTimeline: negotiationExpectedTimeline.trim(),
+                        paymentStatus: negotiationPaymentStatus,
+                        ...(negotiationPaymentStatus === "Advance Payment"
+                          ? {
+                              advanceAmount: Number(negotiationAdvanceAmount),
+                            }
+                          : {}),
+                      }
+                    : {}),
                 }),
           }),
         },
@@ -536,13 +532,18 @@ export function NegotiationWorkspace() {
       notify(
         editingSavedResponse
           ? `${itemTitle} response updated.`
-          : `${itemTitle} response saved. Lead moved to ${proposalNextAction}.`,
+          : isNegotiationResponse
+            ? `Negotiation outcome saved. Lead moved to ${proposalNextAction}.`
+            : `Proposal response saved. Lead moved to ${proposalNextAction}.`,
       );
       setResponseItem(null);
       setProposalResponse("");
       setCustomerExpectedAmount("");
       setProposalNextAction("Negotiation");
       setProposalLostReason(LOST_REASONS[0]);
+      setNegotiationExpectedTimeline("");
+      setNegotiationPaymentStatus("");
+      setNegotiationAdvanceAmount("");
       setResponseMode("new");
       await load();
     } catch (reason) {
@@ -575,6 +576,9 @@ export function NegotiationWorkspace() {
     setProposalNextAction(item.type === "Negotiation" ? "" : "Negotiation");
     setCustomerExpectedAmount("");
     setProposalLostReason(LOST_REASONS[0]);
+    setNegotiationExpectedTimeline("");
+    setNegotiationPaymentStatus("");
+    setNegotiationAdvanceAmount("");
   }
 
   function beginUpdate(item: FollowUp, status: FollowUpStatus) {
@@ -586,31 +590,11 @@ export function NegotiationWorkspace() {
     setServiceProduct("");
     setProposalAmount("");
     setDiscount("");
-    setNegotiationOutcome("");
     setNegotiatedAmount(
       item.negotiation?.negotiatedAmount == null
         ? ""
         : String(item.negotiation.negotiatedAmount),
     );
-    setExpectedTimeline(item.negotiation?.expectedTimeline ?? "");
-    setConfirmedDate(
-      item.negotiation?.confirmedAt?.slice(0, 10) ??
-        businessDateKey(new Date()),
-    );
-    const savedPaymentStatus = item.negotiation?.paymentStatus;
-    setNegotiationPaymentStatus(
-      savedPaymentStatus === "Advance Amount" ||
-        savedPaymentStatus === "Not Paid" ||
-        savedPaymentStatus === "Fully Paid"
-        ? savedPaymentStatus
-        : "",
-    );
-    setAdvanceAmount(
-      item.negotiation?.advanceAmount == null
-        ? ""
-        : String(item.negotiation.advanceAmount),
-    );
-    setNegotiationLostReason(LOST_REASONS[0]);
   }
 
   const completingItem =
@@ -737,6 +721,21 @@ export function NegotiationWorkspace() {
               )}
             </div>
             <div className="follow-up-filter-option">
+              {isNegotiation && (
+                <label className="follow-up-filter-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={pendingResponseOnly}
+                    onChange={(event) => {
+                      resetPage();
+                      setPendingResponseOnly(event.target.checked);
+                    }}
+                  />
+                  Pending response
+                </label>
+              )}
+            </div>
+            <div className="follow-up-filter-option">
               {FOLLOW_UP_STATUSES.map((item) => (
                 <label className="follow-up-filter-checkbox" key={item}>
                   <input
@@ -810,6 +809,7 @@ export function NegotiationWorkspace() {
             setTypeFilters([]);
             setAssignedBdeIds([]);
             setStatusFilters([]);
+            setPendingResponseOnly(false);
             setFrom("");
             setTo("");
           }}
@@ -903,14 +903,14 @@ export function NegotiationWorkspace() {
                           disabled={busy}
                           onClick={() => beginCustomerResponse(item, "view")}
                         >
-                          View
+                          {isNegotiation ? "View outcome" : "View"}
                         </button>
                       ) : (
                         <button
                           disabled={busy}
                           onClick={() => beginCustomerResponse(item)}
                         >
-                          Save response
+                          {isNegotiation ? "Save outcome" : "Save response"}
                         </button>
                       )}
                     </div>
@@ -946,15 +946,19 @@ export function NegotiationWorkspace() {
               <div>
                 <p className="eyebrow">
                   {responseItem.type === "Negotiation"
-                    ? "NEGOTIATION RESPONSE"
+                    ? "NEGOTIATION OUTCOME"
                     : "PROPOSAL RESPONSE"}
                 </p>
                 <h2 id="proposal-response-title">
                   {responseMode === "view"
-                    ? "Customer response"
+                    ? responseItem.type === "Negotiation"
+                      ? "Negotiation outcome"
+                      : "Customer response"
                     : responseMode === "edit"
                       ? "Edit customer response"
-                      : "Save customer response"}
+                      : responseItem.type === "Negotiation"
+                        ? "Save negotiation outcome"
+                        : "Save customer response"}
                 </h2>
               </div>
               <button
@@ -968,10 +972,12 @@ export function NegotiationWorkspace() {
             </div>
             {responseMode === "view" ? (
               <div className="lead-form">
-                <label className="form-wide">
-                  Customer response
-                  <textarea rows={3} readOnly value={proposalResponse} />
-                </label>
+                {proposalResponse && (
+                  <label className="form-wide">
+                    Customer response
+                    <textarea rows={3} readOnly value={proposalResponse} />
+                  </label>
+                )}
                 <div className="form-footer">
                   <p>
                     Outcome:{" "}
@@ -989,27 +995,36 @@ export function NegotiationWorkspace() {
                     >
                       Close
                     </button>
-                    <button
-                      className="primary"
-                      type="button"
-                      onClick={() => setResponseMode("edit")}
-                    >
-                      Edit
-                    </button>
+                    {proposalResponse && (
+                      <button
+                        className="primary"
+                        type="button"
+                        onClick={() => setResponseMode("edit")}
+                      >
+                        Edit
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
             ) : (
               <form className="lead-form" onSubmit={saveProposalResponse}>
-                <label className="form-wide">
-                  Customer response *
-                  <textarea
-                    required
-                    rows={3}
-                    value={proposalResponse}
-                    onChange={(event) => setProposalResponse(event.target.value)}
-                  />
-                </label>
+                {(responseMode === "edit" ||
+                  (responseMode === "new" &&
+                    responseItem.type !== "Negotiation" &&
+                    proposalNextAction === "Negotiation")) && (
+                  <label className="form-wide">
+                    Customer response
+                    <textarea
+                      required={responseMode === "new"}
+                      rows={3}
+                      value={proposalResponse}
+                      onChange={(event) =>
+                        setProposalResponse(event.target.value)
+                      }
+                    />
+                  </label>
+                )}
                 {responseMode === "new" && (
                   <>
                     <label className="form-wide">
@@ -1069,6 +1084,61 @@ export function NegotiationWorkspace() {
                         </select>
                       </label>
                     )}
+                    {responseItem.type === "Negotiation" &&
+                      proposalNextAction === "Won" && (
+                        <>
+                          <label className="form-wide">
+                            Expected timeline *
+                            <input
+                              required
+                              value={negotiationExpectedTimeline}
+                              onChange={(event) =>
+                                setNegotiationExpectedTimeline(
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </label>
+                          <label>
+                            Payment status *
+                            <select
+                              required
+                              value={negotiationPaymentStatus}
+                              onChange={(event) =>
+                                setNegotiationPaymentStatus(
+                                  event.target.value as
+                                    | ""
+                                    | (typeof NEGOTIATION_PAYMENT_STATUSES)[number],
+                                )
+                              }
+                            >
+                              <option value="">Choose payment status</option>
+                              {NEGOTIATION_PAYMENT_STATUSES.map((status) => (
+                                <option key={status} value={status}>
+                                  {status}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {negotiationPaymentStatus === "Advance Payment" && (
+                            <label>
+                              Advance payment amount *
+                              <input
+                                required
+                                min="0.01"
+                                step="0.01"
+                                type="number"
+                                value={negotiationAdvanceAmount}
+                                onChange={(event) =>
+                                  setNegotiationAdvanceAmount(
+                                    event.target.value,
+                                  )
+                                }
+                              />
+                            </label>
+                          )}
+                        </>
+                      )}
                   </>
                 )}
                 <div className="form-footer">
@@ -1294,105 +1364,10 @@ export function NegotiationWorkspace() {
                       }
                     />
                   </label>
-                  <label>
-                    Next action *
-                    <select
-                      required
-                      value={negotiationOutcome}
-                      onChange={(event) =>
-                        setNegotiationOutcome(
-                          event.target.value as "" | "Won" | "Lost",
-                        )
-                      }
-                    >
-                      <option value="">Select outcome</option>
-                      <option value="Won">Won</option>
-                      <option value="Lost">Lost</option>
-                    </select>
-                  </label>
-                  {negotiationOutcome === "Lost" && (
-                    <label className="form-wide">
-                      Lost reason *
-                      <select
-                        required
-                        value={negotiationLostReason}
-                        onChange={(event) =>
-                          setNegotiationLostReason(event.target.value)
-                        }
-                      >
-                        {LOST_REASONS.map((reason) => (
-                          <option key={reason} value={reason}>
-                            {reason}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  {negotiationOutcome === "Won" && (
-                    <>
-                      <label className="form-wide">
-                        Expected timeline *
-                        <input
-                          required
-                          value={expectedTimeline}
-                          onChange={(event) =>
-                            setExpectedTimeline(event.target.value)
-                          }
-                        />
-                      </label>
-                      <label>
-                        Confirmed date *
-                        <input
-                          required
-                          type="date"
-                          value={confirmedDate}
-                          onChange={(event) =>
-                            setConfirmedDate(event.target.value)
-                          }
-                        />
-                      </label>
-                      <label>
-                        Payment status *
-                        <select
-                          required
-                          value={negotiationPaymentStatus}
-                          onChange={(event) =>
-                            setNegotiationPaymentStatus(
-                              event.target.value as
-                                | ""
-                                | (typeof NEGOTIATION_PAYMENT_STATUSES)[number],
-                            )
-                          }
-                        >
-                          <option value="">Select payment status</option>
-                          {NEGOTIATION_PAYMENT_STATUSES.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      {negotiationPaymentStatus === "Advance Amount" && (
-                        <label>
-                          Advance amount *
-                          <input
-                            required
-                            min="0.01"
-                            step="0.01"
-                            type="number"
-                            value={advanceAmount}
-                            onChange={(event) =>
-                              setAdvanceAmount(event.target.value)
-                            }
-                          />
-                        </label>
-                      )}
-                    </>
-                  )}
                   <div className="form-footer">
                     <p>
-                      Completing this form records the deal outcome and closes
-                      the negotiation.
+                      Completing this form updates the negotiated amount and
+                      marks this task completed.
                     </p>
                     <div>
                       <button

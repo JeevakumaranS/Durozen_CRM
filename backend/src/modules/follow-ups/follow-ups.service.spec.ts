@@ -1,7 +1,7 @@
 import * as assert from "node:assert/strict";
 import { test } from "node:test";
 import { BadRequestException, ForbiddenException } from "@nestjs/common";
-import { FollowUpStatus, LeadStage } from "@prisma/client";
+import { FollowUpStatus, LeadStage, Prisma } from "@prisma/client";
 import { PrismaService } from "../../prisma/prisma.service";
 import { FollowUpsService } from "./follow-ups.service";
 
@@ -73,6 +73,68 @@ test("hides pending proposal follow-up duplicates when the matching task is comp
         },
       },
     },
+  );
+});
+
+test("pending response filter only includes proposal and negotiation records without saved responses", async () => {
+  let query: unknown;
+  const service = new FollowUpsService({
+    followUp: {
+      findMany: async (args: unknown) => {
+        query = args;
+        return [];
+      },
+    },
+  } as unknown as PrismaService);
+
+  await service.list({ pendingResponse: "true" }, bde);
+
+  const conditions = (
+    query as { where: { AND: Array<Record<string, unknown>> } }
+  ).where.AND;
+  const responseFilter = conditions.find(
+    (condition) => "OR" in condition,
+  ) as {
+    OR: Array<Record<string, unknown>>;
+  };
+  assert.deepEqual(responseFilter.OR, [
+    {
+      AND: [
+        { type: "Proposal Follow-up" },
+        {
+          OR: [
+            { proposal: { is: { responseSavedAt: null } } },
+            {
+              proposalId: null,
+              lead: { proposals: { some: { responseSavedAt: null } } },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      AND: [
+        { type: "Negotiation" },
+        {
+          OR: [
+            { negotiation: { is: { responseSavedAt: null } } },
+            {
+              negotiationId: null,
+              lead: { negotiations: { some: { responseSavedAt: null } } },
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+});
+
+test("rejects invalid pending response filter values", async () => {
+  const service = new FollowUpsService({} as PrismaService);
+
+  await assert.rejects(
+    service.list({ pendingResponse: "yes" }, bde),
+    BadRequestException,
   );
 });
 
@@ -588,10 +650,12 @@ test("Not Interested completion moves the lead to Lost without follow-up details
   assert.equal(cancelledCallMessages, true);
 });
 
-test("completing a negotiation as Won saves deal, confirmation, and payment details", async () => {
+test("completing a negotiation follow-up marks the current task without creating another", async () => {
   let negotiationUpdate: Record<string, unknown> | undefined;
-  let leadUpdate: Record<string, unknown> | undefined;
+  const leadUpdates: Record<string, unknown>[] = [];
   let followUpAction: string | undefined;
+  let completedStatus: FollowUpStatus | undefined;
+  let createdFollowUp = false;
   const existing = {
     id: "follow-up-1",
     leadId: "lead-1",
@@ -618,10 +682,14 @@ test("completing a negotiation as Won saves deal, confirmation, and payment deta
           updateMany: async (args: {
             data: Record<string, unknown>;
           }) => {
+            completedStatus = args.data.status as FollowUpStatus;
             if (args.data.nextAction) {
               followUpAction = args.data.nextAction as string;
             }
             return { count: 1 };
+          },
+          create: async () => {
+            createdFollowUp = true;
           },
           findUniqueOrThrow: async () => ({ id: existing.id }),
         },
@@ -633,10 +701,11 @@ test("completing a negotiation as Won saves deal, confirmation, and payment deta
         activity: { create: async () => undefined },
         lead: {
           update: async (args: { data: Record<string, unknown> }) => {
-            leadUpdate = args.data;
+            leadUpdates.push(args.data);
             return { id: existing.leadId, stage: args.data.stage };
           },
         },
+        $executeRaw: async () => 1,
         callMessage: { updateMany: async () => ({ count: 1 }) },
       }),
   } as unknown as PrismaService);
@@ -645,31 +714,25 @@ test("completing a negotiation as Won saves deal, confirmation, and payment deta
     existing.id,
     {
       status: FollowUpStatus.COMPLETED,
-      nextStage: LeadStage.WON,
-      nextAction: "Won",
+      nextAction: "Follow up on negotiation",
       negotiatedAmount: 1050,
-      expectedTimeline: "Within 30 days",
-      confirmedAt: "2026-10-21T00:00:00.000Z",
-      paymentStatus: "Advance Amount",
-      advanceAmount: 250,
     },
     bde,
   );
 
-  assert.equal(followUpAction, "Won");
+  assert.equal(completedStatus, FollowUpStatus.COMPLETED);
+  assert.equal(followUpAction, "Follow up on negotiation");
   assert.equal(negotiationUpdate?.negotiatedAmount, 1050);
-  assert.equal(negotiationUpdate?.nextAction, "Won");
-  assert.equal(negotiationUpdate?.expectedTimeline, "Within 30 days");
-  assert.equal(negotiationUpdate?.paymentStatus, "Advance Amount");
-  assert.equal(negotiationUpdate?.advanceAmount, 250);
-  assert.equal(leadUpdate?.stage, LeadStage.WON);
-  assert.equal(leadUpdate?.finalDealValue, 1050);
-  assert.equal(leadUpdate?.paymentStatus, "Advance Amount");
-  assert.equal(leadUpdate?.advanceAmount, 250);
-  assert.equal(leadUpdate?.confirmedAt instanceof Date, true);
+  assert.equal(createdFollowUp, false);
+  assert.equal(
+    leadUpdates.some((update) => update.stage === LeadStage.NEGOTIATION),
+    true,
+  );
+  assert.equal(leadUpdates.at(-1)?.nextAction, null);
+  assert.equal(leadUpdates.at(-1)?.followUpAt, null);
 });
 
-test("requires a lost reason when closing a negotiation as Lost", async () => {
+test("requires the negotiated amount when completing a negotiation", async () => {
   const existing = {
     id: "follow-up-1",
     status: FollowUpStatus.PENDING,
@@ -685,9 +748,8 @@ test("requires a lost reason when closing a negotiation as Lost", async () => {
       existing.id,
       {
         status: FollowUpStatus.COMPLETED,
-        nextStage: LeadStage.LOST,
-        nextAction: "Lost",
-        negotiatedAmount: 900,
+        nextStage: LeadStage.NEGOTIATION,
+        nextAction: "Follow up on negotiation",
       },
       bde,
     ),
@@ -774,14 +836,12 @@ test("completing an interested follow-up with meeting details creates one meetin
       scheduleMeeting: true,
       meetingAt: meetingAt.toISOString(),
       meetingType: "Product Demo",
-      meetingParticipants: "Customer team",
     },
     bde,
   );
 
   assert.equal(meetingData?.leadId, existing.leadId);
   assert.equal(meetingData?.type, "Product Demo");
-  assert.equal(meetingData?.participants, "Customer team");
   assert.equal(meetingActivity?.meetingId, "meeting-1");
   assert.equal(meetingFollowUp?.meetingId, "meeting-1");
   assert.equal(
@@ -816,6 +876,7 @@ test("proposal follow-up completion saves a proposal without creating a successo
     remarks: null,
     type: "Proposal Follow-up",
     lead: {
+      leadNumber: "DZN-2026-00042",
       stage: LeadStage.MEETING,
       followUpAt: new Date(Date.now() - 86400000),
       nextAction: "Prepare a proposal",
@@ -879,9 +940,12 @@ test("proposal follow-up completion saves a proposal without creating a successo
 
   assert.equal(proposalData?.leadId, existing.leadId);
   assert.equal(proposalData?.serviceProduct, "CRM setup");
-  assert.equal(proposalData?.proposalAmount, 125000);
-  assert.equal(proposalData?.discount, 5000);
-  assert.equal(proposalData?.finalAmount, 120000);
+  assert.equal(
+    (proposalData?.proposalAmount as Prisma.Decimal).toNumber(),
+    125000,
+  );
+  assert.equal((proposalData?.discount as Prisma.Decimal).toNumber(), 5000);
+  assert.equal((proposalData?.finalAmount as Prisma.Decimal).toNumber(), 120000);
   assert.equal(proposalActivity?.type, "PROPOSAL_SENT");
   assert.equal(linkedProposalId, "proposal-1");
   assert.equal(successor, undefined);

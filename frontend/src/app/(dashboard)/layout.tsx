@@ -10,10 +10,13 @@ import {
 } from "../../lib/api-client";
 import { AuthUser, getAccessToken, setAuthUser } from "../../lib/auth";
 import { notify } from "../../lib/notifications";
+import { canAccessRoute } from "../../lib/permissions";
 
 type PendingCounts = {
   meetings: number;
   callsAndMessages: number;
+  proposals: number;
+  negotiations: number;
 };
 
 function pendingCountFor(
@@ -23,6 +26,8 @@ function pendingCountFor(
   if (!counts) return undefined;
   if (label === "Meetings") return counts.meetings;
   if (label === "Calls & Msg") return counts.callsAndMessages;
+  if (label === "Proposals") return counts.proposals;
+  if (label === "Negotiations") return counts.negotiations;
   return undefined;
 }
 
@@ -32,33 +37,17 @@ const adminNavigation = [
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
   ["Customers", "/customers"],
+  ["Proposals", "/activities/proposals"],
+  ["BDE Performance", "/performance"],
   ["Reports", "/reports"],
 ];
 
-const bdeRoutes = [
-  "/dashboard",
-  "/leads",
-  "/pipeline",
-  "/activities",
-  "/proposals",
-  "/customers",
-  "/performance",
-  "/reports",
-];
-const managerRoutes = [
-  "/dashboard",
-  "/leads",
-  "/pipeline",
-  "/activities",
-  "/proposals",
-  "/performance",
-  "/reports",
-];
 const managerNavigation = [
   ["Dashboard", "/dashboard"],
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
+  ["BDE Performance", "/performance"],
   ["Reports", "/reports"],
 ];
 const bdeNavigation = [
@@ -66,8 +55,7 @@ const bdeNavigation = [
   ["Leads", "/leads"],
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
-  ["Customers", "/customers"],
-  ["Reports", "/reports"],
+  ["My Performance", "/performance"],
 ];
 
 export default function DashboardLayout({
@@ -118,6 +106,39 @@ export default function DashboardLayout({
   }, [user, pathname]);
 
   useEffect(() => {
+    if (!user) return;
+    let active = true;
+    let failureReported = false;
+    const sendHeartbeat = () => {
+      if (document.visibilityState !== "visible") return;
+      apiClient<{ ok: boolean }>("/auth/heartbeat", { method: "POST" })
+        .then(() => {
+          failureReported = false;
+        })
+        .catch((reason: unknown) => {
+          if (!active || failureReported) return;
+          failureReported = true;
+          notify(
+            reason instanceof Error
+              ? reason.message
+              : "Unable to update your online status.",
+            "error",
+          );
+        });
+    };
+    sendHeartbeat();
+    const interval = window.setInterval(sendHeartbeat, 60_000);
+    document.addEventListener("visibilitychange", sendHeartbeat);
+    window.addEventListener("focus", sendHeartbeat);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", sendHeartbeat);
+      window.removeEventListener("focus", sendHeartbeat);
+    };
+  }, [user]);
+
+  useEffect(() => {
     setLoading(true);
     setError("");
     if (!getAccessToken()) {
@@ -128,19 +149,7 @@ export default function DashboardLayout({
       .then((currentUser) => {
         setAuthUser(currentUser);
         setUser(currentUser);
-        const permittedRoutes =
-          currentUser.role === "BDE"
-            ? bdeRoutes
-            : currentUser.role === "SALES_MANAGER"
-              ? managerRoutes
-              : null;
-        const permitted =
-          permittedRoutes === null ||
-          permittedRoutes.some(
-            (route) =>
-              pathname === route || pathname.startsWith(`${route}/`),
-          );
-        if (!permitted) {
+        if (!canAccessRoute(currentUser.role, pathname)) {
           window.location.replace("/dashboard");
           return;
         }

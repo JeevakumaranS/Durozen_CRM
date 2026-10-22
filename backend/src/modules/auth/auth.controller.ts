@@ -22,10 +22,15 @@ export class AuthController {
   currentUser(@CurrentUser() user: { sub: string }) {
     return this.auth.currentUser(user.sub);
   }
+  @Post("heartbeat")
+  @UseGuards(JwtAuthGuard)
+  heartbeat(@CurrentUser() user: { sub: string }) {
+    return this.auth.heartbeat(user.sub);
+  }
   @Post("logout")
   @UseGuards(JwtAuthGuard)
-  logout() {
-    return this.auth.logout();
+  logout(@CurrentUser() user: { sub: string }) {
+    return this.auth.logout(user.sub);
   }
   @Patch("password")
   @UseGuards(JwtAuthGuard)

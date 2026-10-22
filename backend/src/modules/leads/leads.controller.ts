@@ -16,6 +16,7 @@ import { RolesGuard } from "../../common/guards/roles.guard";
 import { LeadsService } from "./leads.service";
 import { CreateLeadDto, LeadStage } from "./dto/create-lead.dto";
 import { CreateActivityDto } from "./dto/create-activity.dto";
+import { RecordLeadPaymentDto } from "./dto/record-lead-payment.dto";
 import { UpdateLeadDto } from "./dto/update-lead.dto";
 
 @Controller("leads")
@@ -41,7 +42,9 @@ export class LeadsController {
   ) {
     return this.leads.get(id, user);
   }
-  @Post() create(
+  @Post()
+  @Roles("ADMIN", "BDE")
+  create(
     @Body() dto: CreateLeadDto,
     @CurrentUser() user: { sub: string; role: string },
   ) {
@@ -55,6 +58,14 @@ export class LeadsController {
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.leads.addActivity(id, dto, user);
+  }
+  @Post(":id/payments")
+  recordPayment(
+    @Param("id") id: string,
+    @Body() dto: RecordLeadPaymentDto,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.leads.recordPayment(id, dto.amount, user);
   }
   @Patch(":id") update(
     @Param("id") id: string,

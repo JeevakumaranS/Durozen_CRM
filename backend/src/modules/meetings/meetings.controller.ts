@@ -34,6 +34,13 @@ export class MeetingsController {
   ) {
     return this.meetings.list({ date, from, to, status, search }, user);
   }
+  @Get("lead/:leadId/scheduled")
+  scheduledForLead(
+    @Param("leadId") leadId: string,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.meetings.scheduledForLead(leadId, user);
+  }
   @Get(":id")
   get(
     @Param("id") id: string,

@@ -20,10 +20,6 @@ import { ProposalsService } from "./proposals.service";
 @Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class ProposalsController {
   constructor(private readonly proposals: ProposalsService) {}
-  @Get("next-number")
-  nextNumber(@CurrentUser() user: { sub: string; role: string }) {
-    return this.proposals.nextNumber(user);
-  }
 
   @Get("lead/:leadId/latest")
   latestForLead(

@@ -26,7 +26,6 @@ export class CreateLeadDto {
   @Matches(/^[+0-9() -]{7,30}$/) mobileNumber!: string;
   @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsString() location?: string;
-  @IsOptional() @IsString() businessCategory?: string;
   @IsString() leadSource!: string;
   @IsUUID() assignedBdeId!: string;
   @IsString() nextAction!: string;
@@ -37,12 +36,11 @@ export class CreateLeadDto {
     | "HOT"
     | "WARM"
     | "COLD";
-  @IsOptional() @IsNumber() @Min(0) estimatedBudget?: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) estimatedBudget?: number;
   @IsOptional() @IsEnum(LeadStage) stage?: LeadStage;
-  @IsOptional() @IsNumber() @Min(0) finalDealValue?: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) finalDealValue?: number;
   @IsOptional() @IsString() wonService?: string;
   @IsOptional() @IsString() paymentStatus?: string;
-  @IsOptional() @IsDateString() expectedStartDate?: string;
-  @IsOptional() @IsString() wonRemarks?: string;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) advanceAmount?: number;
   @IsOptional() @IsString() lostReason?: string;
 }

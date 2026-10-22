@@ -27,6 +27,33 @@ const SALES_TASK_TYPES = new Set(["Proposal Follow-up", "Negotiation"]);
 const activityContactMethod = (activityType: string) =>
   activityType === "Call" ? "Phone Call" : activityType;
 
+function initialWonPayment(
+  paymentStatus: string | undefined,
+  finalDealValue: number | Prisma.Decimal | null | undefined,
+  advanceAmount: number | Prisma.Decimal | null | undefined,
+) {
+  const finalAmount = new Prisma.Decimal(finalDealValue ?? 0);
+  const reportedAdvance = new Prisma.Decimal(advanceAmount ?? 0);
+  const isFullyPaid = ["Paid", "Fully Paid"].includes(paymentStatus ?? "");
+  const isPartial = ["Partially Paid", "Partial Payment"].includes(
+    paymentStatus ?? "",
+  );
+  const isAdvance = paymentStatus === "Advance Payment";
+  const paidAmount = isFullyPaid
+    ? finalAmount
+    : isPartial || isAdvance
+      ? reportedAdvance
+      : new Prisma.Decimal(0);
+  const normalizedStatus = paidAmount.gte(finalAmount) && finalAmount.gt(0)
+    ? "Fully Paid"
+    : paidAmount.gt(0)
+      ? isPartial
+        ? "Partial Payment"
+        : "Advance Payment"
+      : "Not Paid";
+  return { finalAmount, paidAmount, status: normalizedStatus };
+}
+
 @Injectable()
 export class LeadsService {
   constructor(
@@ -59,10 +86,98 @@ export class LeadsService {
           include: { user: { select: { fullName: true } } },
           orderBy: { createdAt: "desc" },
         },
+        negotiations: {
+          select: { expectedTimeline: true, customerConcern: true },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
       },
     });
     if (!lead) throw new NotFoundException("Lead not found");
     return lead;
+  }
+
+  async recordPayment(id: string, amount: number, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, ...leadScope(user) },
+      select: { id: true },
+    });
+    if (!lead) throw new NotFoundException("Lead not found");
+
+    return this.prisma.$transaction(async (tx) => {
+      await lockLeadActiveWork(tx, id);
+      const currentLead = await tx.lead.findFirst({
+        where: { id, ...leadScope(user) },
+        select: {
+          stage: true,
+          finalDealValue: true,
+          paidAmount: true,
+        },
+      });
+      if (!currentLead) throw new NotFoundException("Lead not found");
+      if (currentLead.stage !== PrismaLeadStage.WON) {
+        throw new BadRequestException("Payments can only be logged for Won leads.");
+      }
+      if (!currentLead.finalDealValue || currentLead.finalDealValue.lte(0)) {
+        throw new BadRequestException(
+          "A positive final deal value is required before logging a payment.",
+        );
+      }
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new BadRequestException("Payment amount must be greater than zero.");
+      }
+
+      const amountReceived = new Prisma.Decimal(amount);
+      if (amountReceived.decimalPlaces() > 2) {
+        throw new BadRequestException(
+          "Payment amounts can have at most two decimal places.",
+        );
+      }
+      const currentPaid = currentLead.paidAmount.toDecimalPlaces(2);
+      const finalDealValue = currentLead.finalDealValue.toDecimalPlaces(2);
+      const nextPaid = currentPaid.add(amountReceived);
+      if (nextPaid.gt(finalDealValue)) {
+        throw new BadRequestException(
+          "Payment cannot exceed the remaining deal balance.",
+        );
+      }
+
+      const status =
+        nextPaid.gte(finalDealValue)
+          ? "Fully Paid"
+          : currentPaid.isZero()
+            ? "Advance Payment"
+            : "Partial Payment";
+      const balance = finalDealValue.sub(nextPaid);
+
+      const updatedLead = await tx.lead.update({
+        where: { id },
+        data: {
+          paidAmount: nextPaid,
+          paymentStatus: status,
+          advanceAmount:
+            currentPaid.isZero() && status === "Advance Payment"
+              ? amountReceived
+              : undefined,
+        },
+        select: { id: true, paidAmount: true, paymentStatus: true },
+      });
+      const activity = await tx.activity.create({
+        data: {
+          leadId: id,
+          userId: user.sub,
+          type: "PAYMENT_RECEIVED",
+          description: `${status} recorded`,
+          outcome: `Received ₹${amountReceived.toFixed(2)}; paid ₹${nextPaid.toFixed(2)} of ₹${finalDealValue.toFixed(2)}; balance ₹${balance.toFixed(2)}`,
+          paymentAmount: amountReceived,
+          paymentStatus: status,
+          paymentTotal: nextPaid,
+          paymentBalance: balance,
+        },
+      });
+      return { lead: updatedLead, activity };
+    });
   }
 
   async delete(id: string, user: Actor) {
@@ -198,10 +313,18 @@ export class LeadsService {
   }
 
   async create(dto: CreateLeadDto, user: Actor) {
-    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    assertActorRole(user, ["ADMIN", "BDE"]);
     const assignedBdeId =
       user.role === "BDE" ? user.sub : dto.assignedBdeId;
     const stage = (dto.stage ?? LeadStage.NEW_LEAD) as PrismaLeadStage;
+    const initialPayment =
+      stage === LeadStage.WON
+        ? initialWonPayment(
+            dto.paymentStatus,
+            dto.finalDealValue,
+            dto.advanceAmount,
+          )
+        : undefined;
     const followUpAt = dto.followUpAt
       ? new Date(dto.followUpAt)
       : undefined;
@@ -253,7 +376,6 @@ export class LeadsService {
           leadDate: dto.leadDate ? new Date(dto.leadDate) : new Date(),
           customerName: dto.customerName,
           businessName: dto.businessName,
-          businessCategory: dto.businessCategory,
           mobileNumber: dto.mobileNumber,
           email: dto.email,
           location: dto.location,
@@ -273,18 +395,34 @@ export class LeadsService {
           requirement: dto.requirement,
           finalDealValue: dto.finalDealValue,
           wonService: dto.wonService,
-          paymentStatus: dto.paymentStatus,
-          expectedStartDate: dto.expectedStartDate
-            ? new Date(dto.expectedStartDate)
-            : undefined,
-          wonRemarks: dto.wonRemarks,
+          paymentStatus: initialPayment?.status ?? dto.paymentStatus,
+          advanceAmount: dto.advanceAmount,
+          paidAmount: initialPayment?.paidAmount,
           lostReason: dto.lostReason,
           activities: {
-            create: {
-              type: "NOTE",
-              description: "Lead created",
-              user: { connect: { id: user.sub } },
-            },
+            create: [
+              {
+                type: "NOTE",
+                description: "Lead created",
+                user: { connect: { id: user.sub } },
+              },
+              ...(initialPayment && initialPayment.paidAmount.gt(0)
+                ? [
+                    {
+                      type: "PAYMENT_RECEIVED",
+                      description: `${initialPayment.status} recorded`,
+                      outcome: `Received ₹${initialPayment.paidAmount.toFixed(2)}; paid ₹${initialPayment.paidAmount.toFixed(2)} of ₹${initialPayment.finalAmount.toFixed(2)}; balance ₹${initialPayment.finalAmount.sub(initialPayment.paidAmount).toFixed(2)}`,
+                      paymentAmount: initialPayment.paidAmount,
+                      paymentStatus: initialPayment.status,
+                      paymentTotal: initialPayment.paidAmount,
+                      paymentBalance: initialPayment.finalAmount.sub(
+                        initialPayment.paidAmount,
+                      ),
+                      user: { connect: { id: user.sub } },
+                    },
+                  ]
+                : []),
+            ],
           },
           callMessages: CALL_MESSAGE_METHODS.has(dto.nextAction)
             ? {
@@ -401,6 +539,14 @@ export class LeadsService {
     }
 
     const stageChanged = nextStage !== existing.stage;
+    const initialPayment =
+      stageChanged && nextStage === PrismaLeadStage.WON
+        ? initialWonPayment(
+            dto.paymentStatus ?? existing.paymentStatus ?? undefined,
+            dto.finalDealValue ?? existing.finalDealValue,
+            dto.advanceAmount ?? existing.advanceAmount,
+          )
+        : undefined;
     if (stageChanged) {
       this.transitions.assertAllowed(existing.stage, nextStage);
     }
@@ -437,7 +583,6 @@ export class LeadsService {
         customerName: dto.customerName,
         businessName: dto.businessName,
         leadDate: dto.leadDate ? new Date(dto.leadDate) : undefined,
-        businessCategory: dto.businessCategory,
         mobileNumber: dto.mobileNumber,
         email: dto.email,
         location: dto.location,
@@ -457,16 +602,18 @@ export class LeadsService {
         requirement: dto.requirement,
         finalDealValue: dto.finalDealValue,
         wonService: dto.wonService,
-        paymentStatus: dto.paymentStatus,
-        expectedStartDate: dto.expectedStartDate
-          ? new Date(dto.expectedStartDate)
-          : undefined,
-        wonRemarks: dto.wonRemarks,
+        paymentStatus: initialPayment?.status ?? dto.paymentStatus,
+        advanceAmount: dto.advanceAmount,
+        paidAmount: initialPayment?.paidAmount,
         lostReason: dto.lostReason,
         stageEnteredAt: stageChanged ? new Date() : undefined,
-        activities: requiresContactDetails
-          ? {
-              create: [
+        activities:
+          requiresContactDetails ||
+          (initialPayment !== undefined && initialPayment.paidAmount.gt(0))
+            ? {
+                create: [
+                  ...(requiresContactDetails
+                    ? [
                 {
                   type:
                     nextStage === "CONTACTED" ? "CONTACT" : "QUALIFICATION",
@@ -492,9 +639,27 @@ export class LeadsService {
                     : undefined,
                   user: { connect: { id: user.sub } },
                 },
-              ],
-            }
-          : undefined,
+                      ]
+                    : []),
+                  ...(initialPayment && initialPayment.paidAmount.gt(0)
+                    ? [
+                        {
+                          type: "PAYMENT_RECEIVED",
+                          description: `${initialPayment.status} recorded`,
+                          outcome: `Received ₹${initialPayment.paidAmount.toFixed(2)}; paid ₹${initialPayment.paidAmount.toFixed(2)} of ₹${initialPayment.finalAmount.toFixed(2)}; balance ₹${initialPayment.finalAmount.sub(initialPayment.paidAmount).toFixed(2)}`,
+                          paymentAmount: initialPayment.paidAmount,
+                          paymentStatus: initialPayment.status,
+                          paymentTotal: initialPayment.paidAmount,
+                          paymentBalance: initialPayment.finalAmount.sub(
+                            initialPayment.paidAmount,
+                          ),
+                          user: { connect: { id: user.sub } },
+                        },
+                      ]
+                    : []),
+                ],
+              }
+            : undefined,
         followUps:
           nextStage === "WON" || nextStage === "LOST"
             ? {

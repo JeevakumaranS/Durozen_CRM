@@ -10,6 +10,7 @@ import { LOST_REASONS } from "../leads/lost-reasons";
 type Kind = "proposals" | "negotiations";
 type LeadOption = {
   id: string;
+  leadNumber: string;
   customerName: string;
   stage: string;
   assignedBde: { fullName: string };
@@ -17,6 +18,7 @@ type LeadOption = {
 type SalesRecord = {
   id: string;
   lead?: {
+    leadNumber: string;
     customerName: string;
     businessName?: string | null;
     nextAction?: string | null;
@@ -51,8 +53,6 @@ const configs: Record<
       },
       { name: "discount", label: "Discount (₹)", type: "number" },
       { name: "tax", label: "Tax (₹)", type: "number" },
-      { name: "validityUntil", label: "Valid until", type: "date" },
-      { name: "sentAt", label: "Sent", type: "datetime" },
       { name: "customerResponse", label: "Customer response" },
       {
         name: "followUpAt",
@@ -91,7 +91,6 @@ const configs: Record<
         type: "number",
       },
       { name: "customerConcern", label: "Customer concern" },
-      { name: "competitorInformation", label: "Competitor information" },
       {
         name: "followUpAt",
         label: "Follow-up",
@@ -114,10 +113,8 @@ const numericFields = new Set([
 ]);
 const dateFields = new Set([
   "followUpAt",
-  "validityUntil",
-  "sentAt",
 ]);
-const dateTimeFields = new Set(["followUpAt", "sentAt"]);
+const dateTimeFields = new Set(["followUpAt"]);
 const proposalNextActions = ["Negotiation", "Won", "Lost"] as const;
 const proposalNextActionFor = (value?: string | null) =>
   proposalNextActions.find((action) => action === value) ??
@@ -130,7 +127,7 @@ const money = (value: unknown) =>
     : new Intl.NumberFormat("en-IN", {
         style: "currency",
         currency: "INR",
-        maximumFractionDigits: 0,
+        maximumFractionDigits: 2,
       }).format(Number(value));
 const date = (value: unknown) =>
   value
@@ -201,9 +198,9 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
           kind === "proposals"
             ? [
                 record.lead?.customerName,
+                record.lead?.leadNumber,
                 record.lead?.businessName,
                 record.lead?.assignedBde?.fullName,
-                record.proposalNumber,
                 record.serviceProduct,
               ]
             : [
@@ -211,7 +208,6 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
                 record.lead?.businessName,
                 record.lead?.assignedBde?.fullName,
                 record.customerConcern,
-                record.competitorInformation,
                 record.originalProposalAmount,
                 record.customerExpectedAmount,
                 record.negotiatedAmount,
@@ -362,8 +358,8 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
       return (
         <>
           <div>
-            <span>Proposal</span>
-            <strong>{text(record.proposalNumber)}</strong>
+            <span>Lead Number</span>
+            <strong>{text(record.lead?.leadNumber)}</strong>
           </div>
           <div>
             <span>Service</span>
@@ -374,8 +370,8 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
             <strong>{money(record.finalAmount)}</strong>
           </div>
           <div>
-            <span>Sent</span>
-            <strong>{date(record.sentAt ?? record.proposalDate)}</strong>
+            <span>Proposal Date</span>
+            <strong>{date(record.proposalDate)}</strong>
           </div>
           <div>
             <span>Follow-up</span>
@@ -509,10 +505,6 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
           <strong>{text(record.customerConcern)}</strong>
         </div>
         <div>
-          <span>Competitor</span>
-          <strong>{text(record.competitorInformation)}</strong>
-        </div>
-        <div>
           <span>Next follow-up</span>
           <strong>{date(record.followUpAt)}</strong>
         </div>
@@ -616,8 +608,8 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
           <p className="subtitle">{config.description}</p>
         </div>
         <div className="workspace-actions">
-          <Link className="secondary-action" href="/pipeline">
-            Sales Pipeline
+          <Link className="secondary-action" href="/leads">
+            Leads
           </Link>
           <button className="primary" onClick={() => setShowForm(true)}>
             + Add {config.title.slice(0, -1).toLowerCase()}
@@ -668,7 +660,7 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
               </div>
               {kind === "proposals" && (
                 <span className="record-number">
-                  {text(record.proposalNumber)}
+                  {text(record.lead?.leadNumber)}
                 </span>
               )}
             </div>
@@ -755,7 +747,8 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
                   <option value="">Select an active lead</option>
                   {leads.map((lead) => (
                     <option key={lead.id} value={lead.id}>
-                      {lead.customerName} · {lead.stage.replaceAll("_", " ")}
+                      {lead.leadNumber} · {lead.customerName} ·{" "}
+                      {lead.stage.replaceAll("_", " ")}
                     </option>
                   ))}
                 </select>
@@ -803,6 +796,7 @@ export function SalesRecordWorkspace({ kind }: { kind: Kind }) {
                       <input
                         type={field.type ?? "text"}
                         min={field.type === "number" ? 0 : undefined}
+                        step={field.type === "number" ? "0.01" : undefined}
                         required={field.required}
                         value={form[field.name] ?? ""}
                         onChange={(event) =>

@@ -29,12 +29,13 @@ export class FollowUpsController {
     @Query("type") type: string | undefined,
     @Query("assignedBdeId") assignedBdeId: string | undefined,
     @Query("status") status: string | undefined,
+    @Query("pendingResponse") pendingResponse: string | undefined,
     @Query("from") from: string | undefined,
     @Query("to") to: string | undefined,
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.followUps.list(
-      { scope, search, type, assignedBdeId, status, from, to },
+      { scope, search, type, assignedBdeId, status, pendingResponse, from, to },
       user,
     );
   }
@@ -42,6 +43,14 @@ export class FollowUpsController {
   @Get("summary")
   summary(@CurrentUser() user: { sub: string; role: string }) {
     return this.followUps.summary(user);
+  }
+
+  @Get("lead/:leadId/pending-proposal")
+  pendingProposalForLead(
+    @Param("leadId") leadId: string,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.followUps.pendingProposalForLead(leadId, user);
   }
 
   @Post()

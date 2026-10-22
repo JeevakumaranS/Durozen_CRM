@@ -8,6 +8,9 @@ import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { getAuthUser } from "../../lib/auth";
 import { notify } from "../../lib/notifications";
 import { ClockDateTimePicker } from "../../components/shared/clock-date-time-picker";
+import { CallCompletionFields } from "../calls/call-completion-fields";
+import { MeetingCompletionFields } from "../meetings/meeting-completion-fields";
+import { ProposalCompletionFields } from "../proposals/proposal-completion-fields";
 import { LOST_REASONS } from "./lost-reasons";
 import {
   businessDateTimeInputValue,
@@ -58,6 +61,11 @@ const PAYMENT_STATUSES = [
   "Paid",
   "Pending",
 ];
+const WON_RESPONSE_PAYMENT_STATUSES = [
+  "Advance Payment",
+  "Fully Paid",
+  "Not Paid",
+] as const;
 
 type Stage = (typeof STAGES)[number];
 type PipelineDisplay = "list" | "kanban";
@@ -83,16 +91,34 @@ type Lead = {
   createdAt: string;
   assignedBde: { id: string; fullName: string };
 };
+type ScheduledMeeting = {
+  id: string;
+  requirement?: string | null;
+  budget?: string | number | null;
+  discussionNotes?: string | null;
+};
+type PendingProposalFollowUp = { id: string };
+type PendingNegotiationFollowUp = {
+  id: string;
+  negotiation?: {
+    originalProposalAmount?: string | number | null;
+    customerExpectedAmount?: string | number | null;
+    negotiatedAmount?: string | number | null;
+  } | null;
+  lead: { id: string; customerName: string };
+};
+type PendingNegotiationOutcome = {
+  id: string;
+  responseSavedAt?: string | null;
+  lead: { id: string; stage: Stage };
+};
 type LeadEditRecord = Omit<Lead, "createdAt"> & {
   email?: string | null;
   location?: string | null;
-  businessCategory?: string | null;
   leadSource: string;
   finalDealValue?: string | number | null;
   wonService?: string | null;
   paymentStatus?: string | null;
-  expectedStartDate?: string | null;
-  wonRemarks?: string | null;
   lostReason?: string | null;
 };
 type Assignee = { id: string; fullName: string; role: string };
@@ -103,7 +129,6 @@ type LeadForm = {
   mobileNumber: string;
   email: string;
   location: string;
-  businessCategory: string;
   requirement: string;
   estimatedBudget: string;
   leadSource: string;
@@ -116,8 +141,6 @@ type LeadForm = {
   finalDealValue: string;
   wonService: string;
   paymentStatus: string;
-  expectedStartDate: string;
-  wonRemarks: string;
   lostReason: string;
   otherLostReason: string;
 };
@@ -149,7 +172,6 @@ function createEmptyLeadForm(): LeadForm {
     mobileNumber: "",
     email: "",
     location: "",
-    businessCategory: "",
     requirement: "",
     estimatedBudget: "",
     leadSource: "Website",
@@ -157,13 +179,11 @@ function createEmptyLeadForm(): LeadForm {
     assignedBdeId: "",
     stage: "NEW_LEAD",
     nextAction: "",
-    followUpAt: "",
+    followUpAt: localDateInputValue(),
     remarks: "",
     finalDealValue: "",
     wonService: "",
     paymentStatus: PAYMENT_STATUSES[0],
-    expectedStartDate: "",
-    wonRemarks: "",
     lostReason: LOST_REASONS[0],
     otherLostReason: "",
   };
@@ -175,6 +195,11 @@ function stageName(stage: Stage) {
 
 function isTerminalStage(stage: Stage) {
   return stage === "WON" || stage === "LOST";
+}
+
+function isBackwardStageMove(currentStage: Stage, targetStage: Stage) {
+  if (isTerminalStage(targetStage)) return false;
+  return STAGES.indexOf(targetStage) < STAGES.indexOf(currentStage);
 }
 
 function displayDate(value?: string | null) {
@@ -193,9 +218,9 @@ function displayMoney(value?: string | number | null) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(Math.round(amount));
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 function PipelineViewIcon({ view }: { view: PipelineDisplay }) {
@@ -239,7 +264,9 @@ export function LeadWorkspace({
   const [loading, setLoading] = useState(true);
   const [stageFormError, setStageFormError] = useState("");
   const [canAssignLeads, setCanAssignLeads] = useState(false);
-  const isAdmin = getAuthUser()?.role === "ADMIN";
+  const userRole = getAuthUser()?.role;
+  const isAdmin = userRole === "ADMIN";
+  const canCreateLeads = userRole === "ADMIN" || userRole === "BDE";
   const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null);
   const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
   const [dropTargetStage, setDropTargetStage] = useState<Stage | null>(null);
@@ -253,8 +280,6 @@ export function LeadWorkspace({
   const [finalDealValue, setFinalDealValue] = useState("");
   const [wonService, setWonService] = useState("");
   const [paymentStatus, setPaymentStatus] = useState(PAYMENT_STATUSES[0]);
-  const [expectedStartDate, setExpectedStartDate] = useState("");
-  const [wonRemarks, setWonRemarks] = useState("");
   const [lostReasonType, setLostReasonType] = useState(LOST_REASONS[0]);
   const [otherLostReason, setOtherLostReason] = useState("");
   const [contactDate, setContactDate] = useState(localDateInputValue());
@@ -265,9 +290,29 @@ export function LeadWorkspace({
   const [contactBudget, setContactBudget] = useState("");
   const [expectedTimeline, setExpectedTimeline] = useState("");
   const [contactRemarks, setContactRemarks] = useState("");
+  const [callResponseAction, setCallResponseAction] = useState("");
+  const [scheduleContactMeeting, setScheduleContactMeeting] = useState<
+    boolean | null
+  >(null);
   const [transitionFollowUpAt, setTransitionFollowUpAt] = useState("");
   const [transitionNextAction, setTransitionNextAction] = useState("");
   const [transitionMeetingAt, setTransitionMeetingAt] = useState("");
+  const [scheduledMeeting, setScheduledMeeting] =
+    useState<ScheduledMeeting | null>(null);
+  const [loadingScheduledMeeting, setLoadingScheduledMeeting] = useState(false);
+  const [scheduledMeetingCheckError, setScheduledMeetingCheckError] =
+    useState("");
+  const [completionRequirement, setCompletionRequirement] = useState("");
+  const [completionBudget, setCompletionBudget] = useState("");
+  const [completionDiscussionNotes, setCompletionDiscussionNotes] =
+    useState("");
+  const [completionNextAction, setCompletionNextAction] = useState("");
+  const [completionFollowUpAt, setCompletionFollowUpAt] = useState("");
+  const [completionLostReason, setCompletionLostReason] = useState(
+    LOST_REASONS[0],
+  );
+  const [completionOtherLostReason, setCompletionOtherLostReason] =
+    useState("");
   const [transitionMeetingType, setTransitionMeetingType] = useState<
     (typeof MEETING_TYPES)[number]
   >("Requirement Discussion");
@@ -275,10 +320,26 @@ export function LeadWorkspace({
     useState("");
   const [transitionCustomerConcerns, setTransitionCustomerConcerns] =
     useState("");
-  const [transitionProposalNumber, setTransitionProposalNumber] = useState("");
   const [transitionProposalDate, setTransitionProposalDate] = useState(
     localDateInputValue(),
   );
+  const [pendingProposalFollowUp, setPendingProposalFollowUp] =
+    useState<PendingProposalFollowUp | null>(null);
+  const [loadingPendingProposalFollowUp, setLoadingPendingProposalFollowUp] =
+    useState(false);
+  const [pendingProposalCheckError, setPendingProposalCheckError] =
+    useState("");
+  const [pendingNegotiationFollowUp, setPendingNegotiationFollowUp] =
+    useState<PendingNegotiationFollowUp | null>(null);
+  const [loadingPendingNegotiationFollowUp, setLoadingPendingNegotiationFollowUp] =
+    useState(false);
+  const [pendingNegotiationCheckError, setPendingNegotiationCheckError] =
+    useState("");
+  const [pendingNegotiationOutcome, setPendingNegotiationOutcome] =
+    useState<PendingNegotiationOutcome | null>(null);
+  const [negotiatedAmount, setNegotiatedAmount] = useState("");
+  const [pendingProposalFollowUpDate, setPendingProposalFollowUpDate] =
+    useState(localDateInputValue());
   const [transitionProposalService, setTransitionProposalService] =
     useState("");
   const [transitionProposalAmount, setTransitionProposalAmount] = useState("");
@@ -286,15 +347,19 @@ export function LeadWorkspace({
     useState("");
   const [transitionProposalResponse, setTransitionProposalResponse] =
     useState("");
+  const [transitionProposalId, setTransitionProposalId] = useState("");
   const [transitionOriginalProposalAmount, setTransitionOriginalProposalAmount] =
     useState("");
   const [loadingTransitionProposalAmount, setLoadingTransitionProposalAmount] =
     useState(false);
   const [transitionCustomerExpectedAmount, setTransitionCustomerExpectedAmount] =
     useState("");
-  const [transitionNegotiatedAmount, setTransitionNegotiatedAmount] =
+  const [transitionWonExpectedTimeline, setTransitionWonExpectedTimeline] =
     useState("");
-  const [transitionNegotiationConcern, setTransitionNegotiationConcern] =
+  const [transitionWonPaymentStatus, setTransitionWonPaymentStatus] = useState<
+    "" | (typeof WON_RESPONSE_PAYMENT_STATUSES)[number]
+  >("");
+  const [transitionWonAdvanceAmount, setTransitionWonAdvanceAmount] =
     useState("");
 
   async function load() {
@@ -354,7 +419,6 @@ export function LeadWorkspace({
             mobileNumber: form.mobileNumber,
             email: form.email || null,
             location: form.location || null,
-            businessCategory: form.businessCategory || null,
             requirement: form.requirement || null,
             estimatedBudget: form.estimatedBudget
               ? Number(form.estimatedBudget)
@@ -376,13 +440,6 @@ export function LeadWorkspace({
             wonService: form.stage === "WON" ? form.wonService || null : null,
             paymentStatus:
               form.stage === "WON" ? form.paymentStatus || null : null,
-            expectedStartDate:
-              form.stage === "WON" && form.expectedStartDate
-                ? new Date(
-                    `${form.expectedStartDate}T00:00:00.000Z`,
-                  ).toISOString()
-                : null,
-            wonRemarks: form.stage === "WON" ? form.wonRemarks || null : null,
             lostReason:
               form.stage === "LOST"
                 ? form.lostReason === "Other"
@@ -411,7 +468,6 @@ export function LeadWorkspace({
           mobileNumber: form.mobileNumber,
           email: form.email || undefined,
           location: form.location || undefined,
-          businessCategory: form.businessCategory || undefined,
           requirement: form.requirement || undefined,
           leadSource: form.leadSource,
           priority: form.priority,
@@ -428,11 +484,6 @@ export function LeadWorkspace({
             form.stage === "WON" ? Number(form.finalDealValue) : undefined,
           wonService: form.stage === "WON" ? form.wonService : undefined,
           paymentStatus: form.stage === "WON" ? form.paymentStatus : undefined,
-          expectedStartDate:
-            form.stage === "WON" && form.expectedStartDate
-              ? new Date(`${form.expectedStartDate}T00:00:00`).toISOString()
-              : undefined,
-          wonRemarks: form.stage === "WON" ? form.wonRemarks : undefined,
           lostReason:
             form.stage === "LOST"
               ? form.lostReason === "Other"
@@ -482,7 +533,6 @@ export function LeadWorkspace({
         mobileNumber: record.mobileNumber,
         email: record.email ?? "",
         location: record.location ?? "",
-        businessCategory: record.businessCategory ?? "",
         requirement: record.requirement ?? "",
         estimatedBudget:
           record.estimatedBudget === null ||
@@ -503,8 +553,6 @@ export function LeadWorkspace({
             : String(record.finalDealValue),
         wonService: record.wonService ?? "",
         paymentStatus: record.paymentStatus ?? PAYMENT_STATUSES[0],
-        expectedStartDate: record.expectedStartDate?.slice(0, 10) ?? "",
-        wonRemarks: record.wonRemarks ?? "",
         lostReason: record.lostReason
           ? LOST_REASONS.includes(record.lostReason)
             ? record.lostReason
@@ -585,7 +633,7 @@ export function LeadWorkspace({
 
   async function saveStage(lead: Lead, targetStage = stageEdit?.stage) {
     if (!targetStage) return;
-    let createdProposalNumber: string | undefined;
+    let createdProposal = false;
     let createdNegotiation = false;
     const requiresMeeting =
       lead.stage === "INTERESTED" && targetStage === "MEETING";
@@ -593,21 +641,95 @@ export function LeadWorkspace({
       lead.stage === "MEETING" && targetStage === "PROPOSAL";
     const requiresNegotiation =
       lead.stage === "PROPOSAL" && targetStage === "NEGOTIATION";
+    const requiresProposalOutcome =
+      lead.stage === "PROPOSAL" &&
+      ["NEGOTIATION", "WON", "LOST"].includes(targetStage);
+    const completingNegotiationFollowUp =
+      lead.stage === "NEGOTIATION" && targetStage === "WON";
+    const savingNegotiationOutcome =
+      completingNegotiationFollowUp &&
+      !pendingNegotiationFollowUp &&
+      pendingNegotiationOutcome !== null;
+    const requiresInitialCall =
+      lead.stage === "NEW_LEAD" && targetStage === "CONTACTED";
+    const completingScheduledMeeting =
+      requiresMeeting && scheduledMeeting !== null;
+    const completingPendingProposal =
+      requiresProposal && pendingProposalFollowUp !== null;
+    if (requiresMeeting && (loadingScheduledMeeting || scheduledMeetingCheckError)) {
+      const message =
+        scheduledMeetingCheckError ||
+        "Checking for an already scheduled meeting.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
     const requiresContactDetails =
-      (lead.stage === "NEW_LEAD" && targetStage === "CONTACTED") ||
+      requiresInitialCall ||
       (lead.stage === "CONTACTED" && targetStage === "INTERESTED");
     const requiresFollowUpPlan =
       lead.stage === "CONTACTED" && targetStage === "INTERESTED";
     const lostReason =
       lostReasonType === "Other" ? otherLostReason.trim() : lostReasonType;
+    if (requiresInitialCall && !callResponseAction) {
+      const message = "Select the customer's response before completing the call.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresInitialCall &&
+      callResponseAction === "Not Interested" &&
+      (!lostReason.trim() ||
+        (lostReasonType === "Other" && !otherLostReason.trim()))
+    ) {
+      const message = "Enter a lost reason before completing the call.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresInitialCall &&
+      callResponseAction === "Interested" &&
+      scheduleContactMeeting === null
+    ) {
+      const message = "Choose whether to schedule a meeting.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresInitialCall &&
+      scheduleContactMeeting &&
+      (!transitionMeetingAt || !transitionMeetingType)
+    ) {
+      const message = "Enter the meeting date, time, and type.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
     if (requiresContactDetails && !contactDate) {
       const message = "Enter the contact date before changing stage.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresContactDetails && !customerResponse.trim()) {
+    if (
+      requiresContactDetails &&
+      (!requiresInitialCall || callResponseAction !== "Not Interested") &&
+      !customerResponse.trim()
+    ) {
       const message = "Enter the customer's response before changing stage.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresInitialCall &&
+      callResponseAction !== "Not Interested" &&
+      !contactRequirement.trim()
+    ) {
+      const message = "Enter the customer's requirements before completing the call.";
       setStageFormError(message);
       notify(message, "error");
       return;
@@ -624,27 +746,80 @@ export function LeadWorkspace({
       notify(message, "error");
       return;
     }
-    if (requiresMeeting && !transitionMeetingAt) {
+    if (requiresMeeting && !completingScheduledMeeting && !transitionMeetingAt) {
       const message =
         "Enter the meeting date and time before moving to Meetings.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresMeeting && !transitionNextAction.trim()) {
+    if (requiresMeeting && !completingScheduledMeeting && !transitionNextAction.trim()) {
       const message = "Enter the next action before moving to Meetings.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresMeeting && !transitionFollowUpAt) {
+    if (requiresMeeting && !completingScheduledMeeting && !transitionFollowUpAt) {
       const message =
         "Enter the next follow-up date before moving to Meetings.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresProposal && !transitionProposalService.trim()) {
+    if (completingScheduledMeeting && !completionRequirement.trim()) {
+      const message = "Enter the meeting requirement.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      completingScheduledMeeting &&
+      !["Proposal", "Lost"].includes(completionNextAction)
+    ) {
+      const message = "Choose the meeting's next action.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      completingScheduledMeeting &&
+      completionNextAction === "Proposal" &&
+      (!completionFollowUpAt ||
+        new Date(businessDateTimeToIso(completionFollowUpAt)).getTime() <=
+          Date.now())
+    ) {
+      const message = "Choose a future next follow-up date.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      completingScheduledMeeting &&
+      completionNextAction === "Lost" &&
+      (completionLostReason === "Other"
+        ? !completionOtherLostReason.trim()
+        : !completionLostReason)
+    ) {
+      const message = "Choose or enter a lost reason.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresProposal &&
+      (loadingPendingProposalFollowUp || pendingProposalCheckError)
+    ) {
+      const message =
+        pendingProposalCheckError ||
+        "Checking for a pending proposal follow-up.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresProposal &&
+      !transitionProposalService.trim()
+    ) {
       const message = "Enter the proposal service before moving to Proposal.";
       setStageFormError(message);
       notify(message, "error");
@@ -672,13 +847,18 @@ export function LeadWorkspace({
       notify(message, "error");
       return;
     }
-    if (requiresProposal && !transitionProposalDate) {
+    if (requiresProposal && !completingPendingProposal && !transitionProposalDate) {
       const message = "Enter the proposal date before moving to Proposal.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresProposal && !transitionFollowUpAt) {
+    if (
+      requiresProposal &&
+      (completingPendingProposal
+        ? !pendingProposalFollowUpDate
+        : !transitionFollowUpAt)
+    ) {
       const message = "Enter a follow-up date before moving to Proposal.";
       setStageFormError(message);
       notify(message, "error");
@@ -705,37 +885,100 @@ export function LeadWorkspace({
       notify(message, "error");
       return;
     }
+    if (requiresNegotiation && !transitionProposalResponse.trim()) {
+      const message = "Enter the customer's response before moving to Negotiation.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
     if (
-      requiresNegotiation &&
-      (!transitionNegotiatedAmount ||
-        !Number.isFinite(Number(transitionNegotiatedAmount)) ||
-        Number(transitionNegotiatedAmount) < 0)
+      completingNegotiationFollowUp &&
+      (loadingPendingNegotiationFollowUp || pendingNegotiationCheckError)
+    ) {
+      const message =
+        pendingNegotiationCheckError ||
+        "Checking for a pending negotiation follow-up.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      completingNegotiationFollowUp &&
+      !pendingNegotiationFollowUp &&
+      !pendingNegotiationOutcome
+    ) {
+      const message =
+        pendingNegotiationCheckError ||
+        "No pending negotiation follow-up or outcome was found for this lead.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      completingNegotiationFollowUp &&
+      pendingNegotiationFollowUp &&
+      (!negotiatedAmount ||
+        !Number.isFinite(Number(negotiatedAmount)) ||
+        Number(negotiatedAmount) < 0)
     ) {
       const message = "Enter a valid negotiated amount.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresNegotiation && !transitionNextAction.trim()) {
-      const message = "Enter the next action before moving to Negotiation.";
+    if (
+      savingNegotiationOutcome &&
+      (!transitionWonExpectedTimeline.trim() ||
+        !transitionWonPaymentStatus ||
+        (transitionWonPaymentStatus === "Advance Payment" &&
+          (!transitionWonAdvanceAmount ||
+            !Number.isFinite(Number(transitionWonAdvanceAmount)) ||
+            Number(transitionWonAdvanceAmount) <= 0)))
+    ) {
+      const message =
+        "Enter the expected timeline and required payment details for a Won outcome.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresNegotiation && !transitionFollowUpAt) {
-      const message = "Enter a follow-up date before moving to Negotiation.";
+    if (requiresProposalOutcome && !transitionProposalId) {
+      const message = "Unable to load the latest proposal.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (targetStage === "WON" && !finalDealValue.trim()) {
+    if (
+      stageEditNeedsWonFromProposal &&
+      (!transitionWonExpectedTimeline.trim() ||
+        !transitionWonPaymentStatus ||
+        (transitionWonPaymentStatus === "Advance Payment" &&
+          (!transitionWonAdvanceAmount ||
+            !Number.isFinite(Number(transitionWonAdvanceAmount)) ||
+            Number(transitionWonAdvanceAmount) <= 0 ||
+            Number(transitionWonAdvanceAmount) > Number(finalDealValue))))
+    ) {
+      const message =
+        "Enter the expected timeline and valid payment details for a Won outcome.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      targetStage === "WON" &&
+      !completingNegotiationFollowUp &&
+      !finalDealValue.trim()
+    ) {
       const message =
         "Enter a final deal value before marking this lead as won.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (targetStage === "WON" && !wonService.trim()) {
+    if (
+      targetStage === "WON" &&
+      !completingNegotiationFollowUp &&
+      !wonService.trim()
+    ) {
       const message =
         "Enter the service or project before marking this lead as won.";
       setStageFormError(message);
@@ -750,8 +993,74 @@ export function LeadWorkspace({
     }
     setStageFormError("");
     setBusy(true);
+    let completedCallStage: Stage | null = null;
+    let completedMeetingStage: Stage | null = null;
+    let completedNegotiationFollowUp = false;
+    let completedNegotiationOutcome = false;
     try {
-      if (requiresMeeting) {
+      if (requiresInitialCall) {
+        const nextStage =
+          callResponseAction === "Not Interested"
+            ? "LOST"
+            : callResponseAction === "Interested"
+              ? "INTERESTED"
+              : "CONTACTED";
+        await apiClient("/calls-messages/complete-lead", {
+          method: "POST",
+          body: JSON.stringify({
+            leadId: lead.id,
+            contactMethod: contactType,
+            contactDate: new Date(
+              `${contactDate}T00:00:00.000Z`,
+            ).toISOString(),
+            responseAction: callResponseAction,
+            customerResponse:
+              callResponseAction === "Not Interested"
+                ? undefined
+                : customerResponse.trim(),
+            requirement:
+              callResponseAction === "Not Interested"
+                ? undefined
+                : contactRequirement.trim(),
+            lostReason:
+              callResponseAction === "Not Interested" ? lostReason : undefined,
+            remarks: contactRemarks.trim() || undefined,
+            scheduleMeeting:
+              callResponseAction === "Interested"
+                ? scheduleContactMeeting
+                : undefined,
+            meetingAt:
+              scheduleContactMeeting && transitionMeetingAt
+                ? businessDateTimeToIso(transitionMeetingAt)
+                : undefined,
+            meetingType:
+              scheduleContactMeeting ? transitionMeetingType : undefined,
+          }),
+        });
+        completedCallStage = nextStage;
+      } else if (completingScheduledMeeting && scheduledMeeting) {
+        const lostReason =
+          completionLostReason === "Other"
+            ? completionOtherLostReason.trim()
+            : completionLostReason;
+        await apiClient(`/meetings/${scheduledMeeting.id}/complete`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            requirement: completionRequirement.trim(),
+            budget: completionBudget ? Number(completionBudget) : null,
+            discussionNotes: completionDiscussionNotes.trim() || undefined,
+            nextAction: completionNextAction,
+            followUpAt:
+              completionNextAction === "Proposal"
+                ? businessDateTimeToIso(completionFollowUpAt)
+                : undefined,
+            lostReason:
+              completionNextAction === "Lost" ? lostReason : undefined,
+          }),
+        });
+        completedMeetingStage =
+          completionNextAction === "Lost" ? "LOST" : "MEETING";
+      } else if (requiresMeeting) {
         await apiClient("/meetings", {
           method: "POST",
           body: JSON.stringify({
@@ -764,41 +1073,109 @@ export function LeadWorkspace({
             followUpAt: businessDateTimeToIso(transitionFollowUpAt),
           }),
         });
+      } else if (requiresProposal && completingPendingProposal) {
+        await apiClient(`/follow-ups/${pendingProposalFollowUp.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: "COMPLETED",
+            nextStage: "PROPOSAL",
+            proposalDate: new Date(
+              `${localDateInputValue()}T00:00:00`,
+            ).toISOString(),
+            serviceProduct: transitionProposalService.trim(),
+            proposalAmount: Number(transitionProposalAmount),
+            discount: transitionProposalDiscount
+              ? Number(transitionProposalDiscount)
+              : 0,
+            dueAt: businessDateTimeToIso(
+              `${pendingProposalFollowUpDate}T00:00`,
+            ),
+            nextAction: "Follow up on proposal",
+          }),
+        });
+        createdProposal = true;
       } else if (requiresProposal) {
-        const proposal = await apiClient<{ proposalNumber: string }>(
-          "/proposals",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              leadId: lead.id,
-              proposalDate: new Date(
-                `${transitionProposalDate}T00:00:00`,
-              ).toISOString(),
-              serviceProduct: transitionProposalService.trim(),
-              proposalAmount: Number(transitionProposalAmount),
-              discount: transitionProposalDiscount
-                ? Number(transitionProposalDiscount)
-                : 0,
-              customerResponse: transitionProposalResponse.trim() || undefined,
-              followUpAt: businessDateTimeToIso(transitionFollowUpAt),
-              nextAction: lead.nextAction?.trim() || "Follow up on proposal",
-            }),
-          },
-        );
-        createdProposalNumber = proposal.proposalNumber;
-      } else if (requiresNegotiation) {
-        await apiClient("/negotiations", {
+        await apiClient("/proposals", {
           method: "POST",
           body: JSON.stringify({
             leadId: lead.id,
-            customerExpectedAmount: Number(transitionCustomerExpectedAmount),
-            negotiatedAmount: Number(transitionNegotiatedAmount),
-            customerConcern: transitionNegotiationConcern.trim() || undefined,
-            nextAction: transitionNextAction.trim(),
+            proposalDate: new Date(
+              `${transitionProposalDate}T00:00:00`,
+            ).toISOString(),
+            serviceProduct: transitionProposalService.trim(),
+            proposalAmount: Number(transitionProposalAmount),
+            discount: transitionProposalDiscount
+              ? Number(transitionProposalDiscount)
+              : 0,
+            customerResponse: transitionProposalResponse.trim() || undefined,
             followUpAt: businessDateTimeToIso(transitionFollowUpAt),
+            nextAction: lead.nextAction?.trim() || "Follow up on proposal",
           }),
         });
-        createdNegotiation = true;
+        createdProposal = true;
+      } else if (requiresProposalOutcome) {
+        await apiClient(`/proposals/${transitionProposalId}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            nextAction:
+              targetStage === "NEGOTIATION"
+                ? "Negotiation"
+                : targetStage === "WON"
+                  ? "Won"
+                  : "Lost",
+            ...(targetStage === "NEGOTIATION"
+              ? {
+                  customerResponse: transitionProposalResponse.trim(),
+                  customerExpectedAmount: Number(
+                    transitionCustomerExpectedAmount,
+                  ),
+                }
+              : {}),
+            ...(targetStage === "WON"
+              ? {
+                  expectedTimeline: transitionWonExpectedTimeline.trim(),
+                  paymentStatus: transitionWonPaymentStatus,
+                  ...(transitionWonPaymentStatus === "Advance Payment"
+                    ? {
+                        advanceAmount: Number(transitionWonAdvanceAmount),
+                      }
+                    : {}),
+                }
+              : {}),
+            ...(targetStage === "LOST"
+              ? {
+                  lostReason:
+                    lostReasonType === "Other"
+                      ? otherLostReason.trim()
+                      : lostReasonType,
+                }
+              : {}),
+          }),
+        });
+        createdNegotiation = targetStage === "NEGOTIATION";
+      } else if (completingNegotiationFollowUp && pendingNegotiationFollowUp) {
+        await apiClient(`/follow-ups/${pendingNegotiationFollowUp.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: "COMPLETED",
+            nextStage: "NEGOTIATION",
+            negotiatedAmount: Number(negotiatedAmount),
+          }),
+        });
+        completedNegotiationFollowUp = true;
+      } else if (savingNegotiationOutcome && pendingNegotiationOutcome) {
+        await apiClient(`/negotiations/${pendingNegotiationOutcome.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            nextAction: "Won",
+            expectedTimeline: transitionWonExpectedTimeline.trim(),
+            paymentStatus: transitionWonPaymentStatus,
+            ...(transitionWonPaymentStatus === "Advance Payment"
+              ? { advanceAmount: Number(transitionWonAdvanceAmount) }
+              : {}),
+          }),
+        });
+        completedNegotiationOutcome = true;
       } else {
         await apiClient<Lead>(`/leads/${lead.id}`, {
           method: "PATCH",
@@ -814,11 +1191,6 @@ export function LeadWorkspace({
               targetStage === "WON" ? Number(finalDealValue) : undefined,
             wonService: targetStage === "WON" ? wonService : undefined,
             paymentStatus: targetStage === "WON" ? paymentStatus : undefined,
-            expectedStartDate:
-              targetStage === "WON" && expectedStartDate
-                ? new Date(expectedStartDate).toISOString()
-                : undefined,
-            wonRemarks: targetStage === "WON" ? wonRemarks : undefined,
             lostReason: targetStage === "LOST" ? lostReason : undefined,
             ...(requiresContactDetails
               ? {
@@ -840,17 +1212,19 @@ export function LeadWorkspace({
           }),
         });
       }
+      const destinationStage =
+        completedCallStage ??
+        completedMeetingStage ??
+        (completedNegotiationFollowUp ? "NEGOTIATION" : targetStage);
       movedLeadToTopByStage.current = {
         ...movedLeadToTopByStage.current,
-        [targetStage]: lead.id,
+        [destinationStage]: lead.id,
       };
-      setStagePages((current) => ({ ...current, [targetStage]: 1 }));
+      setStagePages((current) => ({ ...current, [destinationStage]: 1 }));
       setStageEdit(null);
       setFinalDealValue("");
       setWonService("");
       setPaymentStatus(PAYMENT_STATUSES[0]);
-      setExpectedStartDate("");
-      setWonRemarks("");
       setLostReasonType(LOST_REASONS[0]);
       setOtherLostReason("");
       setContactDate(localDateInputValue());
@@ -860,29 +1234,57 @@ export function LeadWorkspace({
       setContactBudget("");
       setExpectedTimeline("");
       setContactRemarks("");
+      setCallResponseAction("");
+      setScheduleContactMeeting(null);
+      setScheduledMeeting(null);
+      setCompletionRequirement("");
+      setCompletionBudget("");
+      setCompletionDiscussionNotes("");
+      setCompletionNextAction("");
+      setCompletionFollowUpAt("");
+      setCompletionLostReason(LOST_REASONS[0]);
+      setCompletionOtherLostReason("");
       setTransitionFollowUpAt("");
       setTransitionNextAction("");
       setTransitionMeetingAt("");
       setTransitionMeetingType("Requirement Discussion");
       setTransitionDiscussionNotes("");
       setTransitionCustomerConcerns("");
-      setTransitionProposalNumber("");
       setTransitionProposalDate(localDateInputValue());
+      setPendingProposalFollowUp(null);
+      setLoadingPendingProposalFollowUp(false);
+      setPendingProposalCheckError("");
+      setPendingProposalFollowUpDate(localDateInputValue());
       setTransitionProposalService("");
       setTransitionProposalAmount("");
       setTransitionProposalDiscount("");
       setTransitionProposalResponse("");
+      setTransitionProposalId("");
       setTransitionOriginalProposalAmount("");
       setLoadingTransitionProposalAmount(false);
       setTransitionCustomerExpectedAmount("");
-      setTransitionNegotiatedAmount("");
-      setTransitionNegotiationConcern("");
+      setTransitionWonExpectedTimeline("");
+      setTransitionWonPaymentStatus("");
+      setTransitionWonAdvanceAmount("");
+      setPendingNegotiationFollowUp(null);
+      setPendingNegotiationOutcome(null);
+      setLoadingPendingNegotiationFollowUp(false);
+      setPendingNegotiationCheckError("");
+      setNegotiatedAmount("");
       notify(
-        createdProposalNumber
-          ? `Proposal ${createdProposalNumber} created and lead moved to Proposal.`
+        createdProposal
+          ? `Proposal ${lead.leadNumber} created and lead moved to Proposal.`
           : createdNegotiation
             ? "Negotiation saved and lead moved to Negotiation."
-            : `Lead moved to ${stageName(targetStage)}.`,
+            : completedMeetingStage === "LOST"
+              ? "Meeting completed and lead moved to Lost."
+              : completedMeetingStage === "MEETING"
+                ? "Meeting completed and proposal follow-up added."
+                : completedNegotiationFollowUp
+                  ? "Negotiation follow-up completed. Lead remains in Negotiation."
+                  : completedNegotiationOutcome
+                    ? "Negotiation outcome saved. Lead moved to Won."
+                  : `Lead moved to ${stageName(destinationStage)}.`,
       );
       await load();
     } catch (error) {
@@ -901,8 +1303,6 @@ export function LeadWorkspace({
     setFinalDealValue("");
     setWonService("");
     setPaymentStatus(PAYMENT_STATUSES[0]);
-    setExpectedStartDate("");
-    setWonRemarks("");
     setLostReasonType(LOST_REASONS[0]);
     setOtherLostReason("");
     setContactDate(localDateInputValue());
@@ -912,23 +1312,45 @@ export function LeadWorkspace({
     setContactBudget("");
     setExpectedTimeline("");
     setContactRemarks("");
+    setCallResponseAction("");
+    setScheduleContactMeeting(null);
     setTransitionFollowUpAt("");
     setTransitionNextAction("");
     setTransitionMeetingAt("");
+    setScheduledMeeting(null);
+    setLoadingScheduledMeeting(false);
+    setScheduledMeetingCheckError("");
+    setCompletionRequirement("");
+    setCompletionBudget("");
+    setCompletionDiscussionNotes("");
+    setCompletionNextAction("");
+    setCompletionFollowUpAt("");
+    setCompletionLostReason(LOST_REASONS[0]);
+    setCompletionOtherLostReason("");
     setTransitionMeetingType("Requirement Discussion");
     setTransitionDiscussionNotes("");
     setTransitionCustomerConcerns("");
-    setTransitionProposalNumber("");
     setTransitionProposalDate(localDateInputValue());
+    setPendingProposalFollowUp(null);
+    setLoadingPendingProposalFollowUp(false);
+    setPendingProposalCheckError("");
+    setPendingProposalFollowUpDate(localDateInputValue());
     setTransitionProposalService("");
     setTransitionProposalAmount("");
     setTransitionProposalDiscount("");
     setTransitionProposalResponse("");
+    setTransitionProposalId("");
     setTransitionOriginalProposalAmount("");
     setLoadingTransitionProposalAmount(false);
     setTransitionCustomerExpectedAmount("");
-    setTransitionNegotiatedAmount("");
-    setTransitionNegotiationConcern("");
+    setTransitionWonExpectedTimeline("");
+    setTransitionWonPaymentStatus("");
+    setTransitionWonAdvanceAmount("");
+    setPendingNegotiationFollowUp(null);
+    setPendingNegotiationOutcome(null);
+    setLoadingPendingNegotiationFollowUp(false);
+    setPendingNegotiationCheckError("");
+    setNegotiatedAmount("");
   }
 
   function beginStageEdit(lead: Lead, targetStage: Stage) {
@@ -946,22 +1368,54 @@ export function LeadWorkspace({
     );
     setExpectedTimeline("");
     setContactRemarks(lead.remarks ?? "");
+    setCallResponseAction("");
+    setScheduleContactMeeting(null);
+    setScheduledMeeting(null);
+    setLoadingScheduledMeeting(
+      lead.stage === "INTERESTED" && targetStage === "MEETING",
+    );
+    setScheduledMeetingCheckError("");
+    setCompletionRequirement("");
+    setCompletionBudget("");
+    setCompletionDiscussionNotes("");
+    setCompletionNextAction("");
+    setCompletionFollowUpAt("");
+    setCompletionLostReason(LOST_REASONS[0]);
+    setCompletionOtherLostReason("");
     setTransitionFollowUpAt(localDateTimeInputValue(lead.followUpAt));
     setTransitionNextAction(lead.nextAction ?? "");
     setTransitionMeetingAt("");
     setTransitionMeetingType("Requirement Discussion");
     setTransitionDiscussionNotes("");
     setTransitionCustomerConcerns("");
-    setTransitionProposalNumber("");
     setTransitionProposalDate(localDateInputValue());
+    setPendingProposalFollowUp(null);
+    setLoadingPendingProposalFollowUp(
+      lead.stage === "MEETING" && targetStage === "PROPOSAL",
+    );
+    setPendingProposalCheckError("");
+    setPendingProposalFollowUpDate(localDateInputValue());
     setTransitionProposalService("");
     setTransitionProposalAmount("");
     setTransitionProposalDiscount("");
     setTransitionProposalResponse("");
+    setTransitionProposalId("");
     setTransitionOriginalProposalAmount("");
+    setLoadingTransitionProposalAmount(
+      lead.stage === "PROPOSAL" &&
+        ["NEGOTIATION", "WON", "LOST"].includes(targetStage),
+    );
     setTransitionCustomerExpectedAmount("");
-    setTransitionNegotiatedAmount("");
-    setTransitionNegotiationConcern("");
+    setTransitionWonExpectedTimeline("");
+    setTransitionWonPaymentStatus("");
+    setTransitionWonAdvanceAmount("");
+    setPendingNegotiationFollowUp(null);
+    setPendingNegotiationOutcome(null);
+    setLoadingPendingNegotiationFollowUp(
+      lead.stage === "NEGOTIATION" && targetStage === "WON",
+    );
+    setPendingNegotiationCheckError("");
+    setNegotiatedAmount("");
     setStageEdit({ leadId: lead.id, stage: targetStage });
   }
 
@@ -969,13 +1423,21 @@ export function LeadWorkspace({
     setDropTargetStage(null);
     setDraggingLeadId(null);
     if (lead.stage === targetStage) return;
+    if (isBackwardStageMove(lead.stage, targetStage)) {
+      notify("Leads cannot be moved to an earlier stage in the kanban.", "error");
+      return;
+    }
     if (isTerminalStage(lead.stage)) {
       notify("Won and lost leads cannot be moved to another stage.", "error");
       return;
     }
 
     beginStageEdit(lead, targetStage);
-    if (isTerminalStage(targetStage)) return;
+    if (
+      isTerminalStage(targetStage) ||
+      (lead.stage === "PROPOSAL" && targetStage === "NEGOTIATION")
+    )
+      return;
     if (
       (lead.stage === "NEW_LEAD" && targetStage === "CONTACTED") ||
       (lead.stage === "CONTACTED" && targetStage === "INTERESTED") ||
@@ -1007,6 +1469,8 @@ export function LeadWorkspace({
     ((stageEditLead.stage === "NEW_LEAD" && stageEdit.stage === "CONTACTED") ||
       (stageEditLead.stage === "CONTACTED" &&
         stageEdit.stage === "INTERESTED"));
+  const stageEditNeedsInitialCall =
+    stageEditLead?.stage === "NEW_LEAD" && stageEdit?.stage === "CONTACTED";
   const stageEditNeedsFollowUpPlan =
     stageEditLead?.stage === "CONTACTED" && stageEdit?.stage === "INTERESTED";
   const stageEditNeedsMeeting =
@@ -1017,6 +1481,22 @@ export function LeadWorkspace({
     stageEditLead?.stage === "PROPOSAL" && stageEdit?.stage === "NEGOTIATION";
   const stageEditNeedsWonFromProposal =
     stageEditLead?.stage === "PROPOSAL" && stageEdit?.stage === "WON";
+  const stageEditNeedsLostFromProposal =
+    stageEditLead?.stage === "PROPOSAL" && stageEdit?.stage === "LOST";
+  const stageEditNeedsNegotiationCompletion =
+    Boolean(
+      stageEditLead?.stage === "NEGOTIATION" && stageEdit?.stage === "WON",
+    );
+  const stageEditNeedsNegotiationOutcome =
+    Boolean(
+      stageEditNeedsNegotiationCompletion &&
+        !pendingNegotiationFollowUp &&
+        pendingNegotiationOutcome,
+    );
+  const stageEditNeedsProposalOutcome =
+    stageEditNeedsNegotiation ||
+    stageEditNeedsWonFromProposal ||
+    stageEditNeedsLostFromProposal;
   const stageEditNeedsModal =
     stageEdit !== null &&
     (isTerminalStage(stageEdit.stage) ||
@@ -1026,24 +1506,65 @@ export function LeadWorkspace({
       stageEditNeedsNegotiation);
 
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
-
-  useEffect(() => {
-    if (!stageEditNeedsProposal) return;
+    if (!stageEditNeedsMeeting || !stageEdit?.leadId) return;
     let active = true;
-    apiClient<{ proposalNumber: string }>("/proposals/next-number")
-      .then((preview) => {
-        if (active) setTransitionProposalNumber(preview.proposalNumber);
+    setLoadingScheduledMeeting(true);
+    setScheduledMeetingCheckError("");
+    apiClient<ScheduledMeeting | null>(
+      `/meetings/lead/${stageEdit.leadId}/scheduled`,
+    )
+      .then((meeting) => {
+        if (!active) return;
+        setScheduledMeeting(meeting);
+        if (meeting) {
+          setCompletionRequirement(meeting.requirement ?? "");
+          setCompletionBudget(
+            meeting.budget === null || meeting.budget === undefined
+              ? ""
+              : String(meeting.budget),
+          );
+          setCompletionDiscussionNotes(meeting.discussionNotes ?? "");
+        }
       })
       .catch((error: unknown) => {
         if (!active) return;
-        notify(
+        const message =
           error instanceof Error
             ? error.message
-            : "Unable to load the next proposal number.",
-          "error",
-        );
+            : "Unable to check for a scheduled meeting.";
+        setScheduledMeetingCheckError(message);
+        setStageFormError(message);
+      })
+      .finally(() => {
+        if (active) setLoadingScheduledMeeting(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [stageEditNeedsMeeting, stageEdit?.leadId]);
+
+  useEffect(() => {
+    if (!stageEditNeedsProposal || !stageEdit?.leadId) return;
+    let active = true;
+    setLoadingPendingProposalFollowUp(true);
+    setPendingProposalCheckError("");
+    apiClient<PendingProposalFollowUp | null>(
+      `/follow-ups/lead/${stageEdit.leadId}/pending-proposal`,
+    )
+      .then((followUp) => {
+        if (active) setPendingProposalFollowUp(followUp);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Unable to check for a pending proposal follow-up.";
+        setPendingProposalCheckError(message);
+        setStageFormError(message);
+      })
+      .finally(() => {
+        if (active) setLoadingPendingProposalFollowUp(false);
       });
     return () => {
       active = false;
@@ -1051,21 +1572,41 @@ export function LeadWorkspace({
   }, [stageEditNeedsProposal, stageEdit?.leadId]);
 
   useEffect(() => {
-    if (
-      (!stageEditNeedsNegotiation && !stageEditNeedsWonFromProposal) ||
-      !stageEdit?.leadId
-    )
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    if (!stageEditNeedsProposalOutcome || !stageEdit?.leadId)
       return;
     let active = true;
     setTransitionOriginalProposalAmount("");
+    setTransitionProposalId("");
     setLoadingTransitionProposalAmount(true);
     apiClient<{
+      id?: string;
       originalProposalAmount: number | string;
       serviceProduct: string;
     }>(
       `/proposals/lead/${stageEdit.leadId}/latest`,
     )
-      .then((proposal) => {
+      .then(async (proposal) => {
+        let proposalId = proposal.id;
+        if (!proposalId) {
+          const proposals = await apiClient<
+            { id: string; leadId: string; proposalDate: string }[]
+          >("/proposals");
+          proposalId = proposals
+            .filter((item) => item.leadId === stageEdit.leadId)
+            .sort(
+              (left, right) =>
+                new Date(right.proposalDate).getTime() -
+                new Date(left.proposalDate).getTime(),
+            )[0]?.id;
+        }
+        if (!proposalId) {
+          throw new Error("No saved proposal record was found for this lead.");
+        }
+        if (active) setTransitionProposalId(proposalId);
         if (active && stageEditNeedsNegotiation)
           setTransitionOriginalProposalAmount(
             String(proposal.originalProposalAmount),
@@ -1079,6 +1620,11 @@ export function LeadWorkspace({
       .catch((error: unknown) => {
         if (!active) return;
         setLoadingTransitionProposalAmount(false);
+        setStageFormError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load the latest proposal.",
+        );
         notify(
           error instanceof Error
             ? error.message
@@ -1092,8 +1638,71 @@ export function LeadWorkspace({
   }, [
     stageEditNeedsNegotiation,
     stageEditNeedsWonFromProposal,
+    stageEditNeedsProposalOutcome,
     stageEdit?.leadId,
   ]);
+
+  useEffect(() => {
+    if (!stageEditNeedsNegotiationCompletion || !stageEdit?.leadId) return;
+    let active = true;
+    setLoadingPendingNegotiationFollowUp(true);
+    setPendingNegotiationCheckError("");
+    setPendingNegotiationFollowUp(null);
+    setPendingNegotiationOutcome(null);
+    Promise.allSettled([
+      apiClient<PendingNegotiationFollowUp[]>(
+        "/follow-ups?type=Negotiation&status=PENDING",
+      ),
+      apiClient<PendingNegotiationOutcome[]>("/negotiations"),
+    ])
+      .then(([followUpsResult, negotiationsResult]) => {
+        if (!active) return;
+        const followUp =
+          followUpsResult.status === "fulfilled"
+            ? followUpsResult.value.find(
+                (item) => item.lead.id === stageEdit.leadId,
+              ) ?? null
+            : null;
+        const outcome =
+          negotiationsResult.status === "fulfilled"
+            ? negotiationsResult.value.find(
+                (item) =>
+                  item.lead.id === stageEdit.leadId &&
+                  item.lead.stage === "NEGOTIATION" &&
+                  !item.responseSavedAt,
+              ) ?? null
+            : null;
+        setPendingNegotiationFollowUp(followUp);
+        setPendingNegotiationOutcome(followUp ? null : outcome);
+        setNegotiatedAmount(
+          followUp?.negotiation?.negotiatedAmount == null
+            ? ""
+            : String(followUp.negotiation.negotiatedAmount),
+        );
+        setTransitionWonExpectedTimeline("");
+        setTransitionWonPaymentStatus("");
+        setTransitionWonAdvanceAmount("");
+        if (!followUp && !outcome) {
+          const failure =
+            followUpsResult.status === "rejected"
+              ? followUpsResult.reason
+              : negotiationsResult.status === "rejected"
+                ? negotiationsResult.reason
+                : null;
+          setPendingNegotiationCheckError(
+            failure instanceof Error
+              ? failure.message
+              : "No pending negotiation follow-up or outcome was found for this lead.",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingPendingNegotiationFollowUp(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [stageEditNeedsNegotiationCompletion, stageEdit?.leadId]);
 
   return (
     <main className="lead-workspace">
@@ -1108,25 +1717,19 @@ export function LeadWorkspace({
           </p>
         </div>
         <div className="workspace-actions">
-          <Link
-            className="secondary-action"
-            href={
-              view === "pipeline"
-                ? "/leads"
-                : canAssignLeads
-                  ? "#lead-assignment"
-                  : "/pipeline"
-            }
-          >
-            {view === "pipeline"
-              ? "Lead list"
-              : canAssignLeads
-                ? "Lead assignments"
-                : "Sales Pipeline"}
-          </Link>
-          <button className="primary" onClick={openCreateLeadForm}>
-            + Add lead
-          </button>
+          {(view === "pipeline" || canAssignLeads) && (
+            <Link
+              className="secondary-action"
+              href={view === "pipeline" ? "/leads" : "#lead-assignment"}
+            >
+              {view === "pipeline" ? "Lead list" : "Lead assignments"}
+            </Link>
+          )}
+          {canCreateLeads && (
+            <button className="primary" onClick={openCreateLeadForm}>
+              + Add lead
+            </button>
+          )}
         </div>
       </header>
 
@@ -1173,7 +1776,27 @@ export function LeadWorkspace({
       {loading && leads.length === 0 ? (
         <p className="dashboard-loading">Loading authorized leads...</p>
       ) : view === "pipeline" && pipelineDisplay === "kanban" ? (
-        <div className="kanban-board">
+        <div
+          className="kanban-board"
+          onDragOver={(event) => {
+            if (!draggingLeadId) return;
+            const board = event.currentTarget;
+            const bounds = board.getBoundingClientRect();
+            const edgeSize = Math.min(96, bounds.width * 0.15);
+            const rightDistance = bounds.right - event.clientX;
+            const leftDistance = event.clientX - bounds.left;
+            if (
+              rightDistance < edgeSize &&
+              board.scrollLeft < board.scrollWidth - board.clientWidth
+            ) {
+              const proximity = (edgeSize - rightDistance) / edgeSize;
+              board.scrollLeft += Math.ceil(8 + proximity * 24);
+            } else if (leftDistance < edgeSize && board.scrollLeft > 0) {
+              const proximity = (edgeSize - leftDistance) / edgeSize;
+              board.scrollLeft -= Math.ceil(8 + proximity * 24);
+            }
+          }}
+        >
           {STAGES.map((stage) => {
             const stageLeads = filtered.filter((lead) => lead.stage === stage);
             const stageTotalPages = Math.max(
@@ -1301,7 +1924,11 @@ export function LeadWorkspace({
                           }}
                         >
                           {STAGES.map((item) => (
-                            <option key={item} value={item}>
+                            <option
+                              key={item}
+                              value={item}
+                              disabled={isBackwardStageMove(lead.stage, item)}
+                            >
                               {stageName(item)}
                             </option>
                           ))}
@@ -1581,16 +2208,28 @@ export function LeadWorkspace({
                 <p className="eyebrow">UPDATE OPPORTUNITY</p>
                 <h2 id="stage-transition-title">
                   {stageEditNeedsContact
-                    ? stageEdit.stage === "CONTACTED"
-                      ? `Record contact with ${stageEditLead.customerName}`
+                    ? stageEditNeedsInitialCall
+                      ? `Complete call with ${stageEditLead.customerName}`
                       : `Qualify ${stageEditLead.customerName}`
                     : stageEditNeedsMeeting
-                      ? `Schedule a meeting with ${stageEditLead.customerName}`
+                      ? loadingScheduledMeeting
+                        ? `Checking meeting for ${stageEditLead.customerName}`
+                        : scheduledMeeting
+                          ? `Complete meeting with ${stageEditLead.customerName}`
+                          : `Schedule a meeting with ${stageEditLead.customerName}`
                       : stageEditNeedsProposal
                         ? `Prepare proposal for ${stageEditLead.customerName}`
-                          : stageEditNeedsNegotiation
-                            ? `Start negotiation with ${stageEditLead.customerName}`
-                            : `Move ${stageEditLead.customerName} to ${stageName(stageEdit.stage)}`}
+                        : stageEditNeedsNegotiationCompletion
+                        ? stageEditNeedsNegotiationOutcome
+                          ? "Save negotiation outcome"
+                          : "Complete negotiation follow-up"
+                        : stageEditNeedsNegotiation
+                          ? `Save negotiation response for ${stageEditLead.customerName}`
+                          : stageEditNeedsWonFromProposal
+                            ? `Save Won outcome for ${stageEditLead.customerName}`
+                            : stageEditNeedsLostFromProposal
+                              ? `Save Lost outcome for ${stageEditLead.customerName}`
+                              : `Move ${stageEditLead.customerName} to ${stageName(stageEdit.stage)}`}
                 </h2>
               </div>
               <button
@@ -1615,7 +2254,36 @@ export function LeadWorkspace({
                   {stageFormError}
                 </div>
               )}
-              {stageEditNeedsContact && (
+              {stageEditNeedsInitialCall && (
+                <CallCompletionFields
+                  leadName={stageEditLead.customerName}
+                  contactMethod={contactType}
+                  contactDate={contactDate}
+                  responseAction={callResponseAction}
+                  customerResponse={customerResponse}
+                  requirement={contactRequirement}
+                  lostReasonType={lostReasonType}
+                  otherLostReason={otherLostReason}
+                  remarks={contactRemarks}
+                  scheduleMeeting={scheduleContactMeeting}
+                  meetingAt={transitionMeetingAt}
+                  meetingType={transitionMeetingType}
+                  setResponseAction={setCallResponseAction}
+                  setCustomerResponse={setCustomerResponse}
+                  setRequirement={setContactRequirement}
+                  setLostReasonType={setLostReasonType}
+                  setOtherLostReason={setOtherLostReason}
+                  setRemarks={setContactRemarks}
+                  setScheduleMeeting={setScheduleContactMeeting}
+                  setMeetingAt={setTransitionMeetingAt}
+                  setMeetingType={(value) =>
+                    setTransitionMeetingType(
+                      value as (typeof MEETING_TYPES)[number],
+                    )
+                  }
+                />
+              )}
+              {stageEditNeedsContact && !stageEditNeedsInitialCall && (
                 <>
                   <section className="lead-form-section form-wide">
                     <div>
@@ -1690,6 +2358,7 @@ export function LeadWorkspace({
                             Budget
                             <input
                               min="0"
+                              step="0.01"
                               type="number"
                               value={contactBudget}
                               onChange={(event) =>
@@ -1748,7 +2417,38 @@ export function LeadWorkspace({
                   )}
                 </>
               )}
-              {stageEditNeedsMeeting && (
+              {stageEditNeedsMeeting && loadingScheduledMeeting && (
+                <div className="workspace-notice form-wide" role="status">
+                  Checking whether a meeting is already scheduled...
+                </div>
+              )}
+              {stageEditNeedsMeeting && scheduledMeeting && (
+                <section className="lead-form-section form-wide">
+                  <div>
+                    <h3>Complete scheduled meeting</h3>
+                    <p>Enter the meeting outcome and next action</p>
+                  </div>
+                  <div className="lead-form-fields">
+                    <MeetingCompletionFields
+                      requirement={completionRequirement}
+                      budget={completionBudget}
+                      discussionNotes={completionDiscussionNotes}
+                      nextAction={completionNextAction}
+                      followUpAt={completionFollowUpAt}
+                      lostReason={completionLostReason}
+                      otherLostReason={completionOtherLostReason}
+                      setRequirement={setCompletionRequirement}
+                      setBudget={setCompletionBudget}
+                      setDiscussionNotes={setCompletionDiscussionNotes}
+                      setNextAction={setCompletionNextAction}
+                      setFollowUpAt={setCompletionFollowUpAt}
+                      setLostReason={setCompletionLostReason}
+                      setOtherLostReason={setCompletionOtherLostReason}
+                    />
+                  </div>
+                </section>
+              )}
+              {stageEditNeedsMeeting && !loadingScheduledMeeting && !scheduledMeeting && !scheduledMeetingCheckError && (
                 <>
                   <section className="lead-form-section form-wide">
                     <div>
@@ -1831,22 +2531,53 @@ export function LeadWorkspace({
                   </section>
                 </>
               )}
-              {stageEditNeedsProposal && (
+              {stageEditNeedsProposal && loadingPendingProposalFollowUp && (
+                <div className="workspace-notice form-wide" role="status">
+                  Checking for a pending proposal follow-up...
+                </div>
+              )}
+              {stageEditNeedsProposal && pendingProposalFollowUp && (
+                <section className="lead-form-section form-wide">
+                  <div>
+                    <h3>Complete pending proposal follow-up</h3>
+                    <p>
+                      Complete the existing proposal task and move the lead to
+                      Proposal
+                    </p>
+                  </div>
+                  <div className="lead-form-fields">
+                    <ProposalCompletionFields
+                      leadName={stageEditLead.customerName}
+                      serviceProduct={transitionProposalService}
+                      proposalAmount={transitionProposalAmount}
+                      discount={transitionProposalDiscount}
+                      followUpDate={pendingProposalFollowUpDate}
+                      setServiceProduct={setTransitionProposalService}
+                      setProposalAmount={setTransitionProposalAmount}
+                      setDiscount={setTransitionProposalDiscount}
+                      setFollowUpDate={setPendingProposalFollowUpDate}
+                    />
+                  </div>
+                </section>
+              )}
+              {stageEditNeedsProposal &&
+                !loadingPendingProposalFollowUp &&
+                !pendingProposalFollowUp &&
+                !pendingProposalCheckError && (
                 <>
                   <section className="lead-form-section form-wide">
                     <div>
                       <h3>Proposal details</h3>
                       <p>
-                        Review the proposal number, date, service, and pricing
+                        Review the lead number, date, service, and pricing
                       </p>
                     </div>
                     <div className="lead-form-fields">
                       <label>
-                        Proposal Number
+                        Lead Number
                         <input
                           readOnly
-                          value={transitionProposalNumber}
-                          placeholder="Generating proposal number..."
+                          value={stageEditLead?.leadNumber ?? ""}
                         />
                       </label>
                       <label>
@@ -1875,7 +2606,7 @@ export function LeadWorkspace({
                         <input
                           required
                           min="0"
-                          step="any"
+                          step="0.01"
                           type="number"
                           value={transitionProposalAmount}
                           onChange={(event) =>
@@ -1887,7 +2618,7 @@ export function LeadWorkspace({
                         Discount (₹)
                         <input
                           min="0"
-                          step="any"
+                          step="0.01"
                           type="number"
                           value={transitionProposalDiscount}
                           onChange={(event) =>
@@ -1938,99 +2669,214 @@ export function LeadWorkspace({
                   </section>
                 </>
               )}
-              {stageEditNeedsNegotiation && (
+              {stageEditNeedsProposalOutcome &&
+                loadingTransitionProposalAmount && (
+                  <div className="workspace-notice form-wide" role="status">
+                    Loading the latest proposal details...
+                  </div>
+                )}
+              {stageEditNeedsNegotiation &&
+                !loadingTransitionProposalAmount && (
                 <>
-                  <section className="lead-form-section form-wide">
-                    <div>
-                      <h3>Negotiation pricing</h3>
-                      <p>
-                        Compare the proposed price with the customer's
-                        expectation
-                      </p>
-                    </div>
-                    <div className="lead-form-fields">
-                      <label>
-                        Previously Proposed Amount (₹)
-                        <input
-                          type="number"
-                          readOnly
-                          required
-                          value={transitionOriginalProposalAmount}
-                          placeholder={
-                            loadingTransitionProposalAmount
-                              ? "Loading latest proposal..."
-                              : "No proposal amount available"
-                          }
-                        />
-                      </label>
-                      <label>
-                        Customer Expected Amount (₹) *
-                        <input
-                          required
-                          min="0"
-                          step="any"
-                          type="number"
-                          value={transitionCustomerExpectedAmount}
-                          onChange={(event) =>
-                            setTransitionCustomerExpectedAmount(
-                              event.target.value,
-                            )
-                          }
-                        />
-                      </label>
-                      <label>
-                        Negotiated Amount (₹) *
-                        <input
-                          required
-                          min="0"
-                          step="any"
-                          type="number"
-                          value={transitionNegotiatedAmount}
-                          onChange={(event) =>
-                            setTransitionNegotiatedAmount(event.target.value)
-                          }
-                        />
-                      </label>
-                      <label className="form-wide">
-                        Customer Concern
-                        <textarea
-                          rows={2}
-                          value={transitionNegotiationConcern}
-                          onChange={(event) =>
-                            setTransitionNegotiationConcern(event.target.value)
-                          }
-                        />
-                      </label>
-                    </div>
-                  </section>
-                  <section className="lead-form-section form-wide">
-                    <div>
-                      <h3>Follow-up plan</h3>
-                      <p>Set the next step and when it should happen</p>
-                    </div>
-                    <div className="lead-form-fields">
-                      <label>
-                        Next Action *
-                        <input
-                          required
-                          value={transitionNextAction}
-                          onChange={(event) =>
-                            setTransitionNextAction(event.target.value)
-                          }
-                        />
-                      </label>
-                      <ClockDateTimePicker
-                        className="form-wide"
-                        label="Follow-up"
-                        required
-                        value={transitionFollowUpAt}
-                        onChange={setTransitionFollowUpAt}
-                      />
-                    </div>
-                  </section>
+                  <label>
+                    Proposal amount (₹)
+                    <input
+                      type="number"
+                      readOnly
+                      value={transitionOriginalProposalAmount}
+                    />
+                  </label>
+                  <label>
+                    Customer expected amount (₹) *
+                    <input
+                      required
+                      min="0"
+                      step="0.01"
+                      type="number"
+                      value={transitionCustomerExpectedAmount}
+                      onChange={(event) =>
+                        setTransitionCustomerExpectedAmount(
+                          event.target.value,
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="form-wide">
+                    Customer response *
+                    <textarea
+                      required
+                      rows={3}
+                      value={transitionProposalResponse}
+                      onChange={(event) =>
+                        setTransitionProposalResponse(event.target.value)
+                      }
+                    />
+                  </label>
                 </>
               )}
-              {stageEdit.stage === "WON" && (
+              {stageEditNeedsWonFromProposal &&
+                !loadingTransitionProposalAmount && (
+                  <>
+                    <label className="form-wide">
+                      Expected timeline *
+                      <input
+                        required
+                        value={transitionWonExpectedTimeline}
+                        onChange={(event) =>
+                          setTransitionWonExpectedTimeline(event.target.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      Payment status *
+                      <select
+                        required
+                        value={transitionWonPaymentStatus}
+                        onChange={(event) =>
+                          setTransitionWonPaymentStatus(
+                            event.target.value as
+                              | ""
+                              | (typeof WON_RESPONSE_PAYMENT_STATUSES)[number],
+                          )
+                        }
+                      >
+                        <option value="">Choose payment status</option>
+                        {WON_RESPONSE_PAYMENT_STATUSES.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {transitionWonPaymentStatus === "Advance Payment" && (
+                      <label>
+                        Advance amount (₹) *
+                        <input
+                          required
+                          min="0.01"
+                          max={finalDealValue}
+                          step="0.01"
+                          type="number"
+                          value={transitionWonAdvanceAmount}
+                          onChange={(event) =>
+                            setTransitionWonAdvanceAmount(event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
+                  </>
+                )}
+              {stageEditNeedsNegotiationCompletion && (
+                <>
+                  {loadingPendingNegotiationFollowUp && (
+                    <div className="workspace-notice form-wide" role="status">
+                      Loading pending negotiation follow-up...
+                    </div>
+                  )}
+                  {pendingNegotiationCheckError && (
+                    <div className="workspace-notice form-wide" role="alert">
+                      {pendingNegotiationCheckError}
+                    </div>
+                  )}
+                  {pendingNegotiationFollowUp && (
+                    <>
+                      <label>
+                        Lead name
+                        <input
+                          disabled
+                          value={pendingNegotiationFollowUp.lead.customerName}
+                        />
+                      </label>
+                      <label>
+                        Original proposal amount
+                        <input
+                          readOnly
+                          value={displayMoney(
+                            pendingNegotiationFollowUp.negotiation
+                              ?.originalProposalAmount,
+                          )}
+                        />
+                      </label>
+                      <label>
+                        Customer expected amount
+                        <input
+                          readOnly
+                          value={displayMoney(
+                            pendingNegotiationFollowUp.negotiation
+                              ?.customerExpectedAmount,
+                          )}
+                        />
+                      </label>
+                      <label>
+                        Negotiated amount *
+                        <input
+                          required
+                          min="0"
+                          step="0.01"
+                          type="number"
+                          value={negotiatedAmount}
+                          onChange={(event) =>
+                            setNegotiatedAmount(event.target.value)
+                          }
+                        />
+                      </label>
+                    </>
+                  )}
+                  {stageEditNeedsNegotiationOutcome && (
+                    <>
+                      <label className="form-wide">
+                        Expected timeline *
+                        <input
+                          required
+                          value={transitionWonExpectedTimeline}
+                          onChange={(event) =>
+                            setTransitionWonExpectedTimeline(event.target.value)
+                          }
+                        />
+                      </label>
+                      <label>
+                        Payment status *
+                        <select
+                          required
+                          value={transitionWonPaymentStatus}
+                          onChange={(event) =>
+                            setTransitionWonPaymentStatus(
+                              event.target.value as
+                                | ""
+                                | (typeof WON_RESPONSE_PAYMENT_STATUSES)[number],
+                            )
+                          }
+                        >
+                          <option value="">Choose payment status</option>
+                          {WON_RESPONSE_PAYMENT_STATUSES.map((status) => (
+                            <option key={status} value={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {transitionWonPaymentStatus === "Advance Payment" && (
+                        <label>
+                          Advance payment amount *
+                          <input
+                            required
+                            min="0.01"
+                            step="0.01"
+                            type="number"
+                            value={transitionWonAdvanceAmount}
+                            onChange={(event) =>
+                              setTransitionWonAdvanceAmount(event.target.value)
+                            }
+                          />
+                        </label>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+              {stageEdit.stage === "WON" &&
+                !stageEditNeedsWonFromProposal &&
+                !stageEditNeedsNegotiationCompletion && (
                 <>
                   <label className="form-wide">
                     Service / project *
@@ -2045,6 +2891,7 @@ export function LeadWorkspace({
                     <input
                       required
                       min="0"
+                      step="0.01"
                       type="number"
                       value={finalDealValue}
                       onChange={(event) =>
@@ -2062,23 +2909,6 @@ export function LeadWorkspace({
                         <option key={status}>{status}</option>
                       ))}
                     </select>
-                  </label>
-                  <label>
-                    Expected start date
-                    <input
-                      type="date"
-                      value={expectedStartDate}
-                      onChange={(event) =>
-                        setExpectedStartDate(event.target.value)
-                      }
-                    />
-                  </label>
-                  <label>
-                    Deal remarks
-                    <input
-                      value={wonRemarks}
-                      onChange={(event) => setWonRemarks(event.target.value)}
-                    />
                   </label>
                 </>
               )}
@@ -2117,12 +2947,24 @@ export function LeadWorkspace({
                   {stageEditNeedsContact
                     ? "Contact date, contact type, and customer response are required."
                     : stageEditNeedsMeeting
-                      ? "Meeting details, next action, and next follow-up are required."
+                      ? scheduledMeeting
+                        ? "Complete the scheduled meeting with its next action."
+                        : "Schedule a meeting and set the next action and follow-up."
                       : stageEditNeedsProposal
-                        ? "Proposal service, amount, date, and follow-up are required."
+                        ? pendingProposalFollowUp
+                          ? "Complete the pending proposal follow-up to move this lead to Proposal."
+                          : "Proposal service, amount, date, and follow-up are required."
                         : stageEditNeedsNegotiation
-                          ? "Customer expected amount, negotiated amount, next action, and follow-up are required."
-                          : "Required details must be provided before changing stage."}
+                          ? "Record the customer's expected amount and response to save the proposal outcome."
+                          : stageEditNeedsNegotiationCompletion
+                            ? stageEditNeedsNegotiationOutcome
+                              ? "Saving this pending outcome marks the negotiation Won."
+                              : "Completing this follow-up updates the negotiated amount and keeps the lead in Negotiation."
+                            : stageEditNeedsWonFromProposal
+                              ? "Expected timeline and payment details are required to mark this proposal Won."
+                              : stageEditNeedsLostFromProposal
+                                ? "Choose a lost reason to save the proposal outcome."
+                                : "Required details must be provided before changing stage."}
                 </p>
                 <div>
                   <button
@@ -2133,7 +2975,31 @@ export function LeadWorkspace({
                   >
                     Cancel
                   </button>
-                  <button className="primary" type="submit" disabled={busy}>
+                  <button
+                    className="primary"
+                    type="submit"
+                    disabled={
+                      busy ||
+                      (stageEditNeedsMeeting &&
+                        (loadingScheduledMeeting ||
+                          Boolean(scheduledMeetingCheckError))) ||
+                      (stageEditNeedsProposal &&
+                        (loadingPendingProposalFollowUp ||
+                          Boolean(pendingProposalCheckError))) ||
+                      (stageEditNeedsProposalOutcome &&
+                        loadingTransitionProposalAmount) ||
+                      (stageEditNeedsNegotiationCompletion &&
+                        (loadingPendingNegotiationFollowUp ||
+                          Boolean(pendingNegotiationCheckError) ||
+                          (!pendingNegotiationFollowUp &&
+                            !pendingNegotiationOutcome))) ||
+                      Boolean(
+                        stageEditNeedsNegotiationCompletion &&
+                          pendingNegotiationFollowUp &&
+                          !negotiatedAmount,
+                      )
+                    }
+                  >
                     {busy
                       ? "Saving..."
                       : stageEditNeedsContact
@@ -2141,12 +3007,24 @@ export function LeadWorkspace({
                           ? "Save contact and move to Contacted"
                           : "Save qualification and move to Interested"
                         : stageEditNeedsMeeting
-                          ? "Schedule meeting and move to Meetings"
+                          ? scheduledMeeting
+                            ? "Complete meeting"
+                            : "Schedule meeting and move to Meetings"
                           : stageEditNeedsProposal
-                            ? "Create proposal and move to Proposal"
+                            ? pendingProposalFollowUp
+                              ? "Complete proposal and move to Proposal"
+                              : "Create proposal and move to Proposal"
                             : stageEditNeedsNegotiation
-                              ? "Save negotiation and move to Negotiation"
-                              : `Move to ${stageName(stageEdit.stage)}`}
+                            ? "Save customer response and move to Negotiation"
+                            : stageEditNeedsWonFromProposal
+                              ? "Save Won outcome"
+                              : stageEditNeedsNegotiationCompletion
+                                ? stageEditNeedsNegotiationOutcome
+                                  ? "Save Won outcome"
+                                  : "Complete negotiation follow-up"
+                              : stageEditNeedsLostFromProposal
+                                ? "Save Lost outcome"
+                            : `Move to ${stageName(stageEdit.stage)}`}
                   </button>
                 </div>
               </div>
@@ -2297,21 +3175,10 @@ export function LeadWorkspace({
                   </div>
                   <div className="lead-form-fields">
                     <label>
-                      Business Category
-                      <input
-                        value={form.businessCategory}
-                        onChange={(event) =>
-                          setForm({
-                            ...form,
-                            businessCategory: event.target.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
                       Estimated Budget
                       <input
                         min="0"
+                        step="0.01"
                         type="number"
                         value={form.estimatedBudget}
                         onChange={(event) =>
@@ -2497,6 +3364,7 @@ export function LeadWorkspace({
                         <input
                           required
                           min="0"
+                          step="0.01"
                           type="number"
                           value={form.finalDealValue}
                           onChange={(event) =>
@@ -2522,29 +3390,6 @@ export function LeadWorkspace({
                             <option key={status}>{status}</option>
                           ))}
                         </select>
-                      </label>
-                      <label>
-                        Expected Start Date
-                        <input
-                          type="date"
-                          value={form.expectedStartDate}
-                          onChange={(event) =>
-                            setForm({
-                              ...form,
-                              expectedStartDate: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                      <label className="form-wide">
-                        Deal Remarks
-                        <textarea
-                          rows={2}
-                          value={form.wonRemarks}
-                          onChange={(event) =>
-                            setForm({ ...form, wonRemarks: event.target.value })
-                          }
-                        />
                       </label>
                     </>
                   )}

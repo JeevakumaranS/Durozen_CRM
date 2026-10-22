@@ -12,6 +12,8 @@ type TeamUser = {
   email: string;
   role: "SALES_MANAGER" | "BDE";
   isActive: boolean;
+  isOnline: boolean;
+  lastActiveAt: string | null;
   managerId: string | null;
   manager: { id: string; fullName: string } | null;
   _count: { leads: number; managedBdes: number };
@@ -30,6 +32,32 @@ type AdminUser = {
 };
 type CreateRole = "BDE" | "SALES_MANAGER";
 const PAGE_SIZE = 10;
+const ONLINE_WINDOW_MS = 2 * 60_000;
+const EXACT_TIME_AFTER_MS = 20 * 60 * 60_000;
+
+function formatPresence(
+  lastActiveAt: string | null,
+  isOnline: boolean,
+  now: number,
+) {
+  if (!lastActiveAt) return "Never";
+  const lastActive = new Date(lastActiveAt);
+  if (Number.isNaN(lastActive.getTime())) return "Never";
+  const elapsed = Math.max(0, now - lastActive.getTime());
+  if (isOnline && elapsed <= ONLINE_WINDOW_MS) return "Online";
+  if (elapsed > EXACT_TIME_AFTER_MS) {
+    return new Intl.DateTimeFormat("en-IN", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(lastActive);
+  }
+
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes === 0) return "Just now";
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "min" : "mins"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} ${hours === 1 ? "hr" : "hrs"} ago`;
+}
 
 export default function TeamPage() {
   const [items, setItems] = useState<TeamUser[]>([]);
@@ -52,6 +80,7 @@ export default function TeamPage() {
   const [editFullName, setEditFullName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
     const params = new URLSearchParams({
@@ -68,6 +97,17 @@ export default function TeamPage() {
     setTotalPages(result.totalPages);
     setManagers(activeManagers);
   }, [page, search]);
+
+  const refresh = useCallback(async () => {
+    try {
+      await load();
+    } catch (reason) {
+      notify(
+        reason instanceof Error ? reason.message : "Unable to refresh team.",
+        "error",
+      );
+    }
+  }, [load]);
 
   useEffect(() => {
     if (!getAccessToken()) {
@@ -103,16 +143,18 @@ export default function TeamPage() {
     };
   }, [load]);
 
-  async function refresh() {
-    try {
-      await load();
-    } catch (reason) {
-      notify(
-        reason instanceof Error ? reason.message : "Unable to refresh team.",
-        "error",
-      );
-    }
-  }
+  useEffect(() => {
+    const refreshPresence = () => {
+      setNow(Date.now());
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const interval = window.setInterval(refreshPresence, 60_000);
+    document.addEventListener("visibilitychange", refreshPresence);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshPresence);
+    };
+  }, [load, refresh]);
 
   async function updateManager(userId: string, managerId: string) {
     try {
@@ -332,8 +374,18 @@ export default function TeamPage() {
                   <td>
                     <span
                       className={`stage-pill${user.isActive ? "" : " inactive"}`}
+                      title={
+                        user.lastActiveAt
+                          ? new Intl.DateTimeFormat("en-IN", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(new Date(user.lastActiveAt))
+                          : undefined
+                      }
                     >
-                      {user.isActive ? "Active" : "Inactive"}
+                      {user.isActive
+                        ? formatPresence(user.lastActiveAt, user.isOnline, now)
+                        : "Inactive"}
                     </span>
                   </td>
                   <td>

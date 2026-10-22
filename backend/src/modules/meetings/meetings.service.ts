@@ -118,6 +118,19 @@ export class MeetingsService {
     return meeting;
   }
 
+  async scheduledForLead(leadId: string, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE"]);
+    return this.prisma.meeting.findFirst({
+      where: {
+        leadId,
+        status: MeetingStatus.SCHEDULED,
+        lead: leadScope(user),
+      },
+      include: meetingInclude,
+      orderBy: [{ meetingAt: "asc" }, { createdAt: "desc" }],
+    });
+  }
+
   async create(dto: CreateMeetingDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE"]);
     const lead = await this.prisma.lead.findFirst({
@@ -145,7 +158,6 @@ export class MeetingsService {
           meetingAt,
           status: MeetingStatus.SCHEDULED,
           type: dto.type,
-          participants: dto.participants,
           requirement: dto.requirement,
           budget: dto.budget,
           discussionNotes: dto.discussionNotes,
@@ -264,7 +276,6 @@ export class MeetingsService {
         where: { id, status: MeetingStatus.SCHEDULED, lead: leadScope(user) },
         data: {
           type: dto.type,
-          participants: dto.participants,
           requirement: dto.requirement,
           budget: dto.budget,
           discussionNotes: dto.discussionNotes,

@@ -20,7 +20,6 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { CreateFollowUpDto } from "./dto/create-follow-up.dto";
 import { UpdateFollowUpDto } from "./dto/update-follow-up.dto";
 import { canTransition } from "../pipeline/stage-rules";
-import { nextProposalNumber } from "../proposals/proposal-number.service";
 
 type FollowUpFilters = {
   scope?: string;
@@ -28,6 +27,7 @@ type FollowUpFilters = {
   type?: string;
   assignedBdeId?: string;
   status?: string;
+  pendingResponse?: string;
   from?: string;
   to?: string;
 };
@@ -147,6 +147,53 @@ export class FollowUpsService {
     }
     if (statuses?.length) {
       conditions.push({ status: { in: statuses } });
+    }
+    if (filters.pendingResponse === "true") {
+      conditions.push({
+        OR: [
+          {
+            AND: [
+              { type: "Proposal Follow-up" },
+              {
+                OR: [
+                  { proposal: { is: { responseSavedAt: null } } },
+                  {
+                    proposalId: null,
+                    lead: {
+                      proposals: {
+                        some: { responseSavedAt: null },
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            AND: [
+              { type: "Negotiation" },
+              {
+                OR: [
+                  { negotiation: { is: { responseSavedAt: null } } },
+                  {
+                    negotiationId: null,
+                    lead: {
+                      negotiations: {
+                        some: { responseSavedAt: null },
+                      },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+    } else if (
+      filters.pendingResponse !== undefined &&
+      filters.pendingResponse !== "false"
+    ) {
+      throw new BadRequestException("Invalid pending response filter.");
     }
     const types = filters.type
       ?.split(",")
@@ -305,6 +352,20 @@ export class FollowUpsService {
       }));
   }
 
+  async pendingProposalForLead(leadId: string, user: Actor) {
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
+    return this.prisma.followUp.findFirst({
+      where: {
+        leadId,
+        type: "Proposal Follow-up",
+        status: FollowUpStatus.PENDING,
+        lead: leadScope(user),
+      },
+      orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
+      select: { id: true },
+    });
+  }
+
   async create(dto: CreateFollowUpDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     if (!["Proposal Follow-up", "Negotiation"].includes(dto.type)) {
@@ -417,26 +478,10 @@ export class FollowUpsService {
     }
     if (
       isNegotiationCompletion &&
-      dto.nextStage !== LeadStage.WON &&
-      dto.nextStage !== LeadStage.LOST
+      dto.negotiatedAmount === undefined
     ) {
       throw new BadRequestException(
-        "Choose Won or Lost to complete a negotiation.",
-      );
-    }
-    if (
-      isNegotiationCompletion &&
-      (dto.negotiatedAmount === undefined ||
-        (dto.nextStage === LeadStage.LOST && !dto.lostReason?.trim()) ||
-        (dto.nextStage === LeadStage.WON &&
-          (!dto.expectedTimeline?.trim() ||
-            !dto.confirmedAt ||
-            !dto.paymentStatus ||
-            (dto.paymentStatus === "Advance Amount" &&
-              (dto.advanceAmount === undefined || dto.advanceAmount <= 0)))))
-    ) {
-      throw new BadRequestException(
-        "Enter the negotiated amount and all details required for the selected outcome.",
+        "Negotiated amount is required.",
       );
     }
     if (
@@ -574,25 +619,16 @@ export class FollowUpsService {
         );
       }
       if (isProposalCompletion) {
-        const proposalNumberYear = new Date().getFullYear();
-        await tx.$queryRaw`
-          WITH proposal_lock AS MATERIALIZED (
-            SELECT pg_advisory_xact_lock(${proposalNumberYear}::integer, 0::integer)
-          )
-          SELECT 1::integer AS locked FROM proposal_lock
-        `;
-        const proposalNumber = await nextProposalNumber(proposalNumberYear, tx);
         const discount = dto.discount ?? 0;
         const proposal = await tx.proposal.create({
           data: {
             leadId: existing.leadId,
-            proposalNumber,
             proposalDate: new Date(dto.proposalDate!),
             serviceProduct: dto.serviceProduct!,
-            proposalAmount: dto.proposalAmount!,
-            discount,
+            proposalAmount: new Prisma.Decimal(dto.proposalAmount!),
+            discount: new Prisma.Decimal(discount),
             tax: 0,
-            finalAmount: dto.proposalAmount! - discount,
+            finalAmount: new Prisma.Decimal(dto.proposalAmount!).minus(discount),
             followUpAt: new Date(dto.dueAt!),
           },
         });
@@ -605,7 +641,7 @@ export class FollowUpsService {
             leadId: existing.leadId,
             userId: user.sub,
             type: "PROPOSAL_SENT",
-            description: `Proposal ${proposalNumber} prepared for ${dto.serviceProduct!.trim()}`,
+            description: `Proposal ${existing.lead.leadNumber} prepared for ${dto.serviceProduct!.trim()}`,
           },
         });
       } else if (isNegotiationCompletion) {
@@ -618,25 +654,6 @@ export class FollowUpsService {
           where: { id: existing.negotiation.id },
           data: {
             negotiatedAmount: dto.negotiatedAmount,
-            nextAction: dto.nextAction!,
-            expectedTimeline:
-              nextStage === LeadStage.WON
-                ? dto.expectedTimeline!.trim()
-                : undefined,
-            confirmedAt:
-              nextStage === LeadStage.WON
-                ? new Date(dto.confirmedAt!)
-                : undefined,
-            paymentStatus:
-              nextStage === LeadStage.WON ? dto.paymentStatus : undefined,
-            advanceAmount:
-              nextStage === LeadStage.WON
-                ? dto.paymentStatus === "Advance Amount"
-                  ? dto.advanceAmount
-                  : null
-                : undefined,
-            remarks:
-              nextStage === LeadStage.LOST ? dto.lostReason!.trim() : undefined,
           },
         });
         await tx.activity.create({
@@ -644,8 +661,8 @@ export class FollowUpsService {
             leadId: existing.leadId,
             userId: user.sub,
             type: "NEGOTIATION",
-            description: `Negotiation completed: ${dto.nextAction}`,
-            outcome: dto.nextAction,
+            description: "Negotiation follow-up completed",
+            outcome: `Negotiated amount: ${dto.negotiatedAmount}`,
           },
         });
       } else if (dto.status === FollowUpStatus.COMPLETED) {
@@ -677,7 +694,6 @@ export class FollowUpsService {
             leadId: existing.leadId,
             meetingAt,
             type: dto.meetingType!,
-            participants: dto.meetingParticipants?.trim() || undefined,
             requirement: dto.requirement ?? undefined,
             budget: dto.customerBudget ?? undefined,
             nextAction: meetingNextAction,
@@ -711,6 +727,7 @@ export class FollowUpsService {
         });
       } else if (
         !isProposalCompletion &&
+        !isNegotiationCompletion &&
         activeLead &&
         closesPending &&
         dto.dueAt &&
@@ -791,6 +808,8 @@ export class FollowUpsService {
               ? "Follow up on proposal"
               : dto.scheduleMeeting
                 ? undefined
+                : isNegotiationCompletion
+                  ? null
                 : !isProposalCompletion &&
                     activeLead &&
                     closesPending &&
@@ -802,6 +821,8 @@ export class FollowUpsService {
               ? new Date(dto.dueAt!)
               : dto.scheduleMeeting
                 ? undefined
+                : isNegotiationCompletion
+                  ? null
                 : !isProposalCompletion &&
                     activeLead &&
                     closesPending &&

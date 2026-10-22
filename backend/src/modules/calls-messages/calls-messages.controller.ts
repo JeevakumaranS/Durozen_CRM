@@ -14,6 +14,7 @@ import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
 import { CallsMessagesService } from "./calls-messages.service";
 import { CompleteCallMessageDto } from "./dto/complete-call-message.dto";
+import { CompleteLeadCallDto } from "./dto/complete-lead-call.dto";
 import { CreateCallMessageDto } from "./dto/create-call-message.dto";
 import { RescheduleCallMessageDto } from "./dto/reschedule-call-message.dto";
 
@@ -39,6 +40,15 @@ export class CallsMessagesController {
     @CurrentUser() user: { sub: string; role: string },
   ) {
     return this.callsMessages.create(dto, user);
+  }
+
+  @Post("complete-lead")
+  @Roles("ADMIN", "BDE")
+  completeLead(
+    @Body() dto: CompleteLeadCallDto,
+    @CurrentUser() user: { sub: string; role: string },
+  ) {
+    return this.callsMessages.completeLead(dto, user);
   }
 
   @Patch(":id/reschedule")

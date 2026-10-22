@@ -8,11 +8,10 @@ export class CustomersService {
   constructor(private readonly prisma: PrismaService) {}
 
   list(user: Actor) {
-    assertActorRole(user, ["ADMIN", "BDE"]);
+    assertActorRole(user, ["ADMIN"]);
     return this.prisma.lead.findMany({
       where: {
         stage: LeadStage.WON,
-        ...(user.role === "BDE" ? { assignedBdeId: user.sub } : {}),
       },
       include: { assignedBde: { select: { id: true, fullName: true } } },
       orderBy: { stageEnteredAt: "desc" },

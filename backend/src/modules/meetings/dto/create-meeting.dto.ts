@@ -20,9 +20,8 @@ export class CreateMeetingDto {
     "Business Discussion",
   ])
   type!: string;
-  @IsOptional() @IsString() participants?: string;
   @IsOptional() @IsString() requirement?: string;
-  @IsOptional() @IsNumber() @Min(0) budget?: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) budget?: number;
   @IsOptional() @IsString() discussionNotes?: string;
   @IsOptional() @IsString() customerConcerns?: string;
   @IsString() @IsNotEmpty() nextAction!: string;

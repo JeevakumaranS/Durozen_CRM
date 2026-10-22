@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { apiClient } from "../../../lib/api-client";
+import { getAuthUser } from "../../../lib/auth";
 import { notify } from "../../../lib/notifications";
 
 type DashboardSummary = {
@@ -18,7 +19,12 @@ type DashboardSummary = {
     todaysFollowUps: number;
     overdueFollowUps: number;
   };
-  revenue: { today: string; week: string; month: string; pipeline: string };
+  revenue: {
+    today: string;
+    week: string;
+    month: string;
+    pipeline: string;
+  };
   pipeline: { stage: string; count: number; value: string }[];
 };
 
@@ -41,6 +47,8 @@ const money = (value: string) =>
   }).format(Number(value));
 
 export default function Dashboard() {
+  const user = getAuthUser();
+  const canCreateLeads = user?.role === "ADMIN" || user?.role === "BDE";
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState("");
 
@@ -80,15 +88,25 @@ export default function Dashboard() {
     <main className="dashboard-overview">
         <header className="dashboard-header">
           <div>
-            <p className="eyebrow">SALES OVERVIEW</p>
+            <p className="eyebrow">
+              {user?.role === "BDE"
+                ? "MY SALES OVERVIEW"
+                : user?.role === "SALES_MANAGER"
+                  ? "TEAM OVERVIEW"
+                  : "SALES OVERVIEW"}
+            </p>
             <h1>Dashboard</h1>
             <p className="subtitle">
-              A live view of team activity and sales movement.
+              {user?.role === "BDE"
+                ? "Your assigned leads, activity, and follow-ups."
+                : "A live view of team activity and sales movement."}
             </p>
           </div>
-          <Link className="primary" href="/leads/new">
-            + Add lead
-          </Link>
+          {canCreateLeads && (
+            <Link className="primary" href="/leads/new">
+              + Add lead
+            </Link>
+          )}
         </header>
         {!summary && !error && (
           <div className="dashboard-loading">Loading sales activity...</div>
@@ -135,43 +153,43 @@ export default function Dashboard() {
             </section>
             <section className="dashboard-panels">
               <article className="panel pipeline-overview">
-                <div className="panel-head">
-                  <div>
-                    <h2>Sales Pipeline overview</h2>
-                    <p>Lead count and estimated value by stage</p>
-                  </div>
-                  <Link className="text-btn" href="/pipeline">
-                    View Sales Pipeline →
-                  </Link>
-                </div>
-                <div className="bars">
-                  {summary.pipeline.map((item, index) => (
-                    <div className="bar" key={item.stage}>
-                      <div>
-                        <span>{stageLabels[item.stage] ?? item.stage}</span>
-                        <b>{item.count}</b>
-                      </div>
-                      <div className="track">
-                        <i
-                          style={{
-                            width: `${Math.max(2, (item.count / maxCount) * 100)}%`,
-                            backgroundColor: [
-                              "#2876a8",
-                              "#368f9b",
-                              "#4a9b72",
-                              "#c18a2a",
-                              "#b76545",
-                              "#8f5367",
-                              "#338263",
-                              "#b84b50",
-                            ][index],
-                          }}
-                        />
-                      </div>
-                      <small>{money(item.value)}</small>
+                  <div className="panel-head">
+                    <div>
+                      <h2>Sales Pipeline overview</h2>
+                      <p>Lead count and estimated value by stage</p>
                     </div>
-                  ))}
-                </div>
+                    <Link className="text-btn" href="/pipeline">
+                      View Sales Pipeline →
+                    </Link>
+                  </div>
+                  <div className="bars">
+                    {summary.pipeline.map((item, index) => (
+                      <div className="bar" key={item.stage}>
+                        <div>
+                          <span>{stageLabels[item.stage] ?? item.stage}</span>
+                          <b>{item.count}</b>
+                        </div>
+                        <div className="track">
+                          <i
+                            style={{
+                              width: `${Math.max(2, (item.count / maxCount) * 100)}%`,
+                              backgroundColor: [
+                                "#2876a8",
+                                "#368f9b",
+                                "#4a9b72",
+                                "#c18a2a",
+                                "#b76545",
+                                "#8f5367",
+                                "#338263",
+                                "#b84b50",
+                              ][index],
+                            }}
+                          />
+                        </div>
+                        <small>{money(item.value)}</small>
+                      </div>
+                    ))}
+                  </div>
               </article>
               <article className="panel attention-panel">
                 <div className="panel-head">
@@ -179,8 +197,17 @@ export default function Dashboard() {
                     <h2>Follow-up attention</h2>
                     <p>Work due today and past due</p>
                   </div>
-                  <Link className="text-btn" href="/activities">
-                    Open activities →
+                  <Link
+                    className="text-btn"
+                    href={
+                      user?.role === "SALES_MANAGER"
+                        ? "/activities/proposals"
+                        : "/activities"
+                    }
+                  >
+                    {user?.role === "SALES_MANAGER"
+                      ? "Open follow-ups →"
+                      : "Open activities →"}
                   </Link>
                 </div>
                 <div className="attention-count">

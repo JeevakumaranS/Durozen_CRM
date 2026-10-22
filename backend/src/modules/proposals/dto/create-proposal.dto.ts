@@ -11,11 +11,9 @@ export class CreateProposalDto {
   @IsUUID() leadId!: string;
   @IsOptional() @IsDateString() proposalDate?: string;
   @IsString() serviceProduct!: string;
-  @IsNumber() @Min(0) proposalAmount!: number;
-  @IsOptional() @IsNumber() @Min(0) discount?: number;
-  @IsOptional() @IsNumber() @Min(0) tax?: number;
-  @IsOptional() @IsDateString() validityUntil?: string;
-  @IsOptional() @IsDateString() sentAt?: string;
+  @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) proposalAmount!: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) discount?: number;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) tax?: number;
   @IsOptional() @IsString() customerResponse?: string;
   @IsDateString() followUpAt!: string;
   @IsString() nextAction!: string;

@@ -195,7 +195,6 @@ async function seed(tx: Prisma.TransactionClient) {
       status: MeetingStatus.COMPLETED,
       completedAt: daysFromNow(-1),
       type: "Discovery",
-      participants: "Rahul Mehta, Alex Sales",
       requirement: "Lead tracking and sales reporting",
       budget: 275000,
       discussionNotes:
@@ -205,23 +204,29 @@ async function seed(tx: Prisma.TransactionClient) {
     },
   });
 
-  await tx.proposal.upsert({
-    where: { proposalNumber: "PROP-2026-DEMO-003" },
-    update: {},
-    create: {
-      leadId: proposalLead.id,
-      proposalNumber: "PROP-2026-DEMO-003",
-      serviceProduct: "CRM implementation and sales reporting",
-      proposalAmount: 380000,
-      discount: 20000,
-      tax: 64800,
-      finalAmount: 424800,
-      validityUntil: daysFromNow(14),
-      sentAt: daysFromNow(-1),
-      followUpAt: daysFromNow(3),
-      remarks: "Includes setup, training, and reporting dashboards.",
-    },
+  const proposalData = {
+    serviceProduct: "CRM implementation and sales reporting",
+    proposalAmount: 380000,
+    discount: 20000,
+    tax: 64800,
+    finalAmount: 424800,
+    followUpAt: daysFromNow(3),
+    remarks: "Includes setup, training, and reporting dashboards.",
+  };
+  const existingProposal = await tx.proposal.findFirst({
+    where: { leadId: proposalLead.id },
+    select: { id: true },
   });
+  if (existingProposal) {
+    await tx.proposal.update({
+      where: { id: existingProposal.id },
+      data: proposalData,
+    });
+  } else {
+    await tx.proposal.create({
+      data: { leadId: proposalLead.id, ...proposalData },
+    });
+  }
 
   await tx.negotiation.upsert({
     where: { id: "0199f000-0002-7000-8000-000000000001" },
@@ -233,7 +238,6 @@ async function seed(tx: Prisma.TransactionClient) {
       customerExpectedAmount: 480000,
       negotiatedAmount: 495000,
       customerConcern: "Phased payment terms",
-      competitorInformation: "Comparing two regional CRM providers",
       nextAction: "Confirm revised commercial terms",
       followUpAt: daysFromNow(2),
       remarks: "Customer is aligned on scope pending payment schedule.",

@@ -268,13 +268,12 @@ export class ReportsService {
           },
           select: {
             id: true,
-            proposalNumber: true,
             proposalDate: true,
             finalAmount: true,
             customerResponse: true,
-            validityUntil: true,
             lead: {
               select: {
+                leadNumber: true,
                 customerName: true,
                 assignedBde: { select: { fullName: true } },
               },

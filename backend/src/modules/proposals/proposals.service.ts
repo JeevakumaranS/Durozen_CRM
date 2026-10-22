@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { LeadStage } from "@prisma/client";
+import { LeadStage, Prisma } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
 import {
   assertLeadHasNoOtherActiveWork,
@@ -12,7 +12,6 @@ import {
 import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 import { StageTransitionService } from "../pipeline/stage-transition.service";
-import { nextProposalNumber } from "./proposal-number.service";
 import { CreateProposalDto } from "./dto/create-proposal.dto";
 import { UpdateProposalDto } from "./dto/update-proposal.dto";
 
@@ -35,15 +34,6 @@ export class ProposalsService {
     });
   }
 
-  async nextNumber(user: Actor) {
-    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
-    const year = new Date().getFullYear();
-    return {
-      proposalNumber: await nextProposalNumber(year, this.prisma),
-      year,
-    };
-  }
-
   async latestAmountForLead(leadId: string, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const lead = await this.prisma.lead.findFirst({
@@ -55,10 +45,11 @@ export class ProposalsService {
     const proposal = await this.prisma.proposal.findFirst({
       where: { leadId: lead.id },
       orderBy: { proposalDate: "desc" },
-      select: { finalAmount: true, serviceProduct: true },
+      select: { id: true, finalAmount: true, serviceProduct: true },
     });
     if (!proposal) throw new NotFoundException("No proposal found for this lead");
     return {
+      id: proposal.id,
       originalProposalAmount: Number(proposal.finalAmount),
       serviceProduct: proposal.serviceProduct,
     };
@@ -66,7 +57,10 @@ export class ProposalsService {
 
   async create(dto: CreateProposalDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
-    if ((dto.discount ?? 0) > dto.proposalAmount)
+    const proposalAmount = new Prisma.Decimal(dto.proposalAmount);
+    const discount = new Prisma.Decimal(dto.discount ?? 0);
+    const tax = new Prisma.Decimal(dto.tax ?? 0);
+    if (discount.gt(proposalAmount))
       throw new BadRequestException("Discount cannot exceed proposal amount");
     const lead = await this.prisma.lead.findFirst({
       where: {
@@ -80,18 +74,9 @@ export class ProposalsService {
     if (lead.stage !== LeadStage.PROPOSAL)
       this.transitions.assertAllowed(lead.stage, LeadStage.PROPOSAL);
 
-    const finalAmount =
-      dto.proposalAmount - (dto.discount ?? 0) + (dto.tax ?? 0);
-    const year = new Date().getFullYear();
+    const finalAmount = proposalAmount.minus(discount).plus(tax);
     return this.prisma.$transaction(async (tx) => {
       await assertLeadHasNoOtherActiveWork(tx, lead.id);
-      await tx.$queryRaw`
-        WITH proposal_lock AS MATERIALIZED (
-          SELECT pg_advisory_xact_lock(${year}::integer, 0::integer)
-        )
-        SELECT 1::integer AS locked FROM proposal_lock
-      `;
-      const proposalNumber = await nextProposalNumber(year, tx);
       const stageChanged = lead.stage !== LeadStage.PROPOSAL;
       await tx.lead.update({
         where: { id: lead.id },
@@ -103,7 +88,7 @@ export class ProposalsService {
           activities: {
             create: {
               type: "PROPOSAL_SENT",
-              description: `Proposal ${proposalNumber} prepared for ${dto.serviceProduct}`,
+              description: `Proposal ${lead.leadNumber} prepared for ${dto.serviceProduct}`,
               user: { connect: { id: user.sub } },
             },
           },
@@ -119,19 +104,14 @@ export class ProposalsService {
       return tx.proposal.create({
         data: {
           leadId: lead.id,
-          proposalNumber,
           proposalDate: dto.proposalDate
             ? new Date(dto.proposalDate)
             : new Date(),
           serviceProduct: dto.serviceProduct,
-          proposalAmount: dto.proposalAmount,
-          discount: dto.discount ?? 0,
-          tax: dto.tax ?? 0,
+          proposalAmount,
+          discount,
+          tax,
           finalAmount,
-          validityUntil: dto.validityUntil
-            ? new Date(dto.validityUntil)
-            : undefined,
-          sentAt: dto.sentAt ? new Date(dto.sentAt) : undefined,
           customerResponse: dto.customerResponse,
           followUpAt: new Date(dto.followUpAt),
           remarks: dto.remarks,
@@ -139,6 +119,7 @@ export class ProposalsService {
         include: {
           lead: {
             select: {
+              leadNumber: true,
               customerName: true,
               assignedBde: { select: { fullName: true } },
             },
@@ -158,7 +139,7 @@ export class ProposalsService {
       include: { lead: true },
     });
     if (!proposal) throw new NotFoundException("Proposal not found");
-    if (dto.nextAction && !dto.customerResponse?.trim()) {
+    if (dto.nextAction === "Negotiation" && !dto.customerResponse?.trim()) {
       throw new BadRequestException("A customer response is required.");
     }
     if (
@@ -185,6 +166,26 @@ export class ProposalsService {
     if (dto.nextAction === "Lost" && !dto.lostReason?.trim()) {
       throw new BadRequestException("A lost reason is required.");
     }
+    if (
+      dto.nextAction === "Won" &&
+      (!dto.expectedTimeline?.trim() ||
+        !dto.paymentStatus ||
+        (dto.paymentStatus === "Advance Payment" &&
+          (dto.advanceAmount === undefined || dto.advanceAmount <= 0)))
+    ) {
+      throw new BadRequestException(
+        "Expected timeline and payment details are required to mark this proposal Won.",
+      );
+    }
+    if (
+      dto.nextAction === "Won" &&
+      dto.paymentStatus === "Advance Payment" &&
+      new Prisma.Decimal(dto.advanceAmount!).gt(proposal.finalAmount)
+    ) {
+      throw new BadRequestException(
+        "Advance payment cannot exceed the proposal's final amount.",
+      );
+    }
     if (targetStage) {
       this.transitions.assertAllowed(proposal.lead.stage, targetStage);
     }
@@ -194,11 +195,25 @@ export class ProposalsService {
       targetStage === LeadStage.WON || targetStage === LeadStage.LOST;
     return this.prisma.$transaction(async (tx) => {
       const responseSavedAt = dto.nextAction ? new Date() : undefined;
+      let effectivePaymentStatus = dto.paymentStatus;
+      const initialPaidAmount =
+        targetStage === LeadStage.WON
+          ? dto.paymentStatus === "Fully Paid"
+            ? new Prisma.Decimal(proposal.finalAmount)
+            : dto.paymentStatus === "Advance Payment"
+              ? new Prisma.Decimal(dto.advanceAmount!)
+              : new Prisma.Decimal(0)
+          : undefined;
+      if (initialPaidAmount) {
+        effectivePaymentStatus = initialPaidAmount.gte(proposal.finalAmount)
+          ? "Fully Paid"
+          : dto.paymentStatus!;
+      }
       if (responseSavedAt) {
         const responseUpdate = await tx.proposal.updateMany({
           where: { id, responseSavedAt: null },
           data: {
-            customerResponse: dto.customerResponse!.trim(),
+            customerResponse: dto.customerResponse?.trim() ?? null,
             responseSavedAt,
           },
         });
@@ -241,6 +256,17 @@ export class ProposalsService {
               targetStage === LeadStage.WON
                 ? proposal.serviceProduct
                 : undefined,
+            ...(targetStage === LeadStage.WON
+              ? {
+                  paymentStatus: effectivePaymentStatus,
+                  paidAmount: initialPaidAmount,
+                  advanceAmount:
+                    effectivePaymentStatus === "Advance Payment"
+                      ? dto.advanceAmount
+                      : null,
+                  confirmedAt: new Date(),
+                }
+              : {}),
             ...(isClosedOutcome
               ? {
                   followUps: {
@@ -269,6 +295,34 @@ export class ProposalsService {
               : {}),
           },
         });
+        if (targetStage === LeadStage.WON) {
+          await tx.activity.create({
+            data: {
+              leadId: proposal.leadId,
+              userId: user.sub,
+              type: "DEAL_WON",
+              description: `Deal won for ${proposal.finalAmount}`,
+              outcome: `Payment status: ${effectivePaymentStatus}`,
+              expectedTimeline: dto.expectedTimeline!.trim(),
+            },
+          });
+          if (initialPaidAmount!.gt(0)) {
+            const finalDealValue = new Prisma.Decimal(proposal.finalAmount);
+            await tx.activity.create({
+              data: {
+                leadId: proposal.leadId,
+                userId: user.sub,
+                type: "PAYMENT_RECEIVED",
+                description: `${effectivePaymentStatus} recorded`,
+                outcome: `Received ₹${initialPaidAmount!.toFixed(2)}; paid ₹${initialPaidAmount!.toFixed(2)} of ₹${finalDealValue.toFixed(2)}; balance ₹${finalDealValue.sub(initialPaidAmount!).toFixed(2)}`,
+                paymentAmount: initialPaidAmount,
+                paymentStatus: effectivePaymentStatus,
+                paymentTotal: initialPaidAmount,
+                paymentBalance: finalDealValue.sub(initialPaidAmount!),
+              },
+            });
+          }
+        }
       }
       if (dto.nextAction === "Negotiation") {
         const negotiation = await tx.negotiation.create({
@@ -318,7 +372,7 @@ export class ProposalsService {
       return tx.proposal.update({
         where: { id },
         data: {
-          customerResponse: dto.customerResponse,
+          customerResponse: dto.customerResponse?.trim(),
           responseSavedAt,
           followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : undefined,
           remarks: dto.remarks,

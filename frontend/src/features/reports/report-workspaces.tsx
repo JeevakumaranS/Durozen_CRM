@@ -263,13 +263,12 @@ const reportColumns: Record<string, ReportColumn[]> = {
     { key: "latestActivity", label: "Last Activity / Notes" },
   ],
   proposals: [
-    { key: "proposalNumber", label: "Proposal Number" },
+    { key: "lead.leadNumber", label: "Lead Number" },
     { key: "lead.customerName", label: "Lead / Company" },
     { key: "lead.assignedBde.fullName", label: "Assigned BDE" },
     { key: "proposalDate", label: "Proposal Date", format: "date" },
     { key: "finalAmount", label: "Proposal Value", format: "money" },
     { key: "customerResponse", label: "Status / Response" },
-    { key: "validityUntil", label: "Valid Until", format: "date" },
   ],
   "won-lost": [
     { key: "customerName", label: "Lead / Deal" },
@@ -314,7 +313,8 @@ const money = (value: string | number) =>
   new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(Number(value));
 const localDate = (date: Date) => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -376,7 +376,7 @@ export function MonthlySummaryWorkspace() {
   const [data, setData] = useState<MonthlySummary | null>(null);
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState(false);
-  const canExport = getAuthUser()?.role !== "BDE";
+  const canExport = getAuthUser()?.role === "ADMIN";
   useEffect(() => {
     apiClient<MonthlySummary>(`/reports/monthly-summary?month=${month}`)
       .then(setData)
@@ -493,6 +493,7 @@ export function MonthlySummaryWorkspace() {
 }
 
 export function PerformanceWorkspace() {
+  const user = getAuthUser();
   const today = new Date();
   const [from, setFrom] = useState(
     localDate(new Date(today.getFullYear(), today.getMonth(), 1)),
@@ -521,10 +522,14 @@ export function PerformanceWorkspace() {
     <main className="lead-workspace report-workspace">
       <header className="workspace-header">
         <div>
-          <p className="eyebrow">TEAM RESULTS</p>
-          <h1>BDE performance</h1>
+          <p className="eyebrow">
+            {user?.role === "BDE" ? "MY RESULTS" : "TEAM RESULTS"}
+          </p>
+          <h1>{user?.role === "BDE" ? "My performance" : "BDE performance"}</h1>
           <p className="subtitle">
-            Lead handling, sales activity, follow-ups, and won revenue.
+            {user?.role === "BDE"
+              ? "Your lead handling, sales activity, follow-ups, and won revenue."
+              : "Lead handling, sales activity, follow-ups, and won revenue."}
           </p>
         </div>
         <div className="date-range-controls">
@@ -590,9 +595,11 @@ export function PerformanceWorkspace() {
           <div className="empty-list">No BDE performance for this period.</div>
         )}
       </div>
-      <div className="report-shortcuts">
-        <Link href="/reports">Open reports</Link>
-      </div>
+      {user?.role !== "BDE" && (
+        <div className="report-shortcuts">
+          <Link href="/reports">Open reports</Link>
+        </div>
+      )}
     </main>
   );
 }
@@ -923,7 +930,7 @@ export function ReportDetailWorkspace() {
   }
 
   const columns = reportColumns[report.apiType] ?? [];
-  const canExport = user?.role !== "BDE";
+  const canExport = user?.role === "ADMIN";
   const summaryMetrics =
     report.apiType === "revenue"
       ? [

@@ -16,6 +16,10 @@ export class AuthService {
     });
     if (!user || !(await bcrypt.compare(dto.password, user.passwordHash)))
       throw new UnauthorizedException("Invalid email or password");
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { lastActiveAt: new Date(), isOnline: true },
+    });
     const accessToken = sign(
       {
         sub: user.id,
@@ -50,8 +54,20 @@ export class AuthService {
     };
   }
 
-  logout() {
+  async logout(userId: string) {
+    await this.prisma.user.updateMany({
+      where: { id: userId, isActive: true },
+      data: { lastActiveAt: new Date(), isOnline: false },
+    });
     return { message: "Signed out" };
+  }
+
+  async heartbeat(userId: string) {
+    await this.prisma.user.updateMany({
+      where: { id: userId, isActive: true },
+      data: { lastActiveAt: new Date(), isOnline: true },
+    });
+    return { ok: true };
   }
 
   async changePassword(

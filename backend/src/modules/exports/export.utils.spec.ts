@@ -49,13 +49,12 @@ test("report table definitions expose the requested columns in stable order", ()
       "Last Activity / Notes",
     ],
     proposals: [
-      "Proposal Number",
+      "Lead Number",
       "Lead / Company",
       "Assigned BDE",
       "Proposal Date",
       "Proposal Value",
       "Status / Response",
-      "Valid Until",
     ],
     "won-lost": [
       "Lead / Deal",
@@ -120,4 +119,22 @@ test("lead, revenue, and lost reason report values use stored records", () => {
     { label: "Budget", value: 2, format: "number" },
     { label: "Not recorded", value: 1, format: "number" },
   ]);
+});
+
+test("proposal reports derive the displayed lead number from the related lead", () => {
+  const report = buildReportTable(
+    [
+      {
+        lead: {
+          leadNumber: "LD-2026-100",
+          customerName: "Asha Rao",
+        },
+        finalAmount: "12500.50",
+      },
+    ],
+    "proposals",
+  );
+
+  assert.equal(report.rows[0]["lead.leadNumber"], "LD-2026-100");
+  assert.equal(report.rows[0].finalAmount, "12500.50");
 });

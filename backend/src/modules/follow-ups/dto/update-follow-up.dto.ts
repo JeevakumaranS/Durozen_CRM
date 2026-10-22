@@ -45,7 +45,7 @@ export class UpdateFollowUpDto {
   requirement?: string | null;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   customerBudget?: number | null;
 
@@ -87,17 +87,17 @@ export class UpdateFollowUpDto {
   serviceProduct?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   proposalAmount?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   discount?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   negotiatedAmount?: number;
 
@@ -106,7 +106,7 @@ export class UpdateFollowUpDto {
   paymentStatus?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   advanceAmount?: number;
 
@@ -123,7 +123,4 @@ export class UpdateFollowUpDto {
   ])
   meetingType?: string;
 
-  @IsOptional()
-  @IsString()
-  meetingParticipants?: string;
 }
