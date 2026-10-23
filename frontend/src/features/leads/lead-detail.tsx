@@ -3,8 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { apiClient, getApiUrl } from "../../lib/api-client";
-import { getAccessToken } from "../../lib/auth";
+import { apiClient, apiClientResponse } from "../../lib/api-client";
 import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { notify } from "../../lib/notifications";
 import { formatBusinessDateTime, formatEmbeddedDateTimes } from "../../lib/business-time";
@@ -229,29 +228,9 @@ export function LeadDetail({
     if (!lead) return;
     setExportingActivities(format);
     try {
-      const token = getAccessToken();
-      const response = await fetch(
-        `${getApiUrl()}/exports/lead-activities/${encodeURIComponent(id)}?format=${format}`,
-        {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        },
+      const response = await apiClientResponse(
+        `/exports/lead-activities/${encodeURIComponent(id)}?format=${format}`,
       );
-      if (!response.ok) {
-        const responseText = await response.text();
-        let message = responseText;
-        try {
-          const body: unknown = JSON.parse(responseText);
-          if (body && typeof body === "object" && "message" in body) {
-            const detail = body.message;
-            message = Array.isArray(detail)
-              ? detail.join(", ")
-              : String(detail);
-          }
-        } catch {
-          message = responseText;
-        }
-        throw new Error(message || "Unable to export lead activity.");
-      }
       const file = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = file;
@@ -474,9 +453,11 @@ export function LeadDetail({
                       <strong>{activity.type.replaceAll("_", " ")}</strong>
                       <time>{dateTime(activity.createdAt)}</time>
                     </span>
-                    <span className="timeline-entry-description">
-                      {formatEmbeddedDateTimes(activity.description)}
-                    </span>
+                    {!isProposalSent && (
+                      <span className="timeline-entry-description">
+                        {formatEmbeddedDateTimes(activity.description)}
+                      </span>
+                    )}
                     <span className="timeline-entry-prompt">
                       {expandedActivityId === activity.id
                         ? "Hide details"

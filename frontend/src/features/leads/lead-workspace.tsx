@@ -294,6 +294,10 @@ export function LeadWorkspace({
   const [scheduleContactMeeting, setScheduleContactMeeting] = useState<
     boolean | null
   >(null);
+  const [interestedTransitionAction, setInterestedTransitionAction] = useState<
+    "" | "INTERESTED" | "LOST"
+  >("");
+  const [interestedMeetingType, setInterestedMeetingType] = useState("");
   const [transitionFollowUpAt, setTransitionFollowUpAt] = useState("");
   const [transitionNextAction, setTransitionNextAction] = useState("");
   const [transitionMeetingAt, setTransitionMeetingAt] = useState("");
@@ -631,8 +635,17 @@ export function LeadWorkspace({
     }
   }
 
-  async function saveStage(lead: Lead, targetStage = stageEdit?.stage) {
+  async function saveStage(lead: Lead, requestedStage = stageEdit?.stage) {
+    let targetStage = requestedStage;
     if (!targetStage) return;
+    const requiresInterestedChoice =
+      lead.stage === "CONTACTED" && targetStage === "INTERESTED";
+    if (
+      requiresInterestedChoice &&
+      interestedTransitionAction === "LOST"
+    ) {
+      targetStage = "LOST";
+    }
     let createdProposal = false;
     let createdNegotiation = false;
     const requiresMeeting =
@@ -664,13 +677,28 @@ export function LeadWorkspace({
       notify(message, "error");
       return;
     }
-    const requiresContactDetails =
-      requiresInitialCall ||
-      (lead.stage === "CONTACTED" && targetStage === "INTERESTED");
+    const requiresContactDetails = requiresInitialCall;
     const requiresFollowUpPlan =
       lead.stage === "CONTACTED" && targetStage === "INTERESTED";
     const lostReason =
       lostReasonType === "Other" ? otherLostReason.trim() : lostReasonType;
+    if (requiresInterestedChoice && !interestedTransitionAction) {
+      const message = "Choose Interested or Lost as the next action.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
+    if (
+      requiresInterestedChoice &&
+      interestedTransitionAction === "LOST" &&
+      (!lostReason.trim() ||
+        (lostReasonType === "Other" && !otherLostReason.trim()))
+    ) {
+      const message = "Choose or enter a lost reason.";
+      setStageFormError(message);
+      notify(message, "error");
+      return;
+    }
     if (requiresInitialCall && !callResponseAction) {
       const message = "Select the customer's response before completing the call.";
       setStageFormError(message);
@@ -734,14 +762,11 @@ export function LeadWorkspace({
       notify(message, "error");
       return;
     }
-    if (requiresFollowUpPlan && !transitionNextAction.trim()) {
-      const message = "Enter the next action before moving to Interested.";
-      setStageFormError(message);
-      notify(message, "error");
-      return;
-    }
-    if (requiresFollowUpPlan && !transitionFollowUpAt) {
-      const message = "Enter the follow-up date before moving to Interested.";
+    if (
+      requiresFollowUpPlan &&
+      (!transitionMeetingAt || !interestedMeetingType)
+    ) {
+      const message = "Enter the meeting date, time, and type.";
       setStageFormError(message);
       notify(message, "error");
       return;
@@ -1182,11 +1207,18 @@ export function LeadWorkspace({
           body: JSON.stringify({
             stage: targetStage,
             nextAction: requiresFollowUpPlan
-              ? transitionNextAction.trim()
+              ? "Attend scheduled meeting"
               : lead.nextAction,
             followUpAt: requiresFollowUpPlan
-              ? businessDateTimeToIso(transitionFollowUpAt)
+              ? businessDateTimeToIso(transitionMeetingAt)
               : lead.followUpAt,
+            ...(requiresFollowUpPlan
+              ? {
+                  scheduleMeeting: true,
+                  meetingAt: businessDateTimeToIso(transitionMeetingAt),
+                  meetingType: interestedMeetingType,
+                }
+              : {}),
             finalDealValue:
               targetStage === "WON" ? Number(finalDealValue) : undefined,
             wonService: targetStage === "WON" ? wonService : undefined,
@@ -1236,6 +1268,8 @@ export function LeadWorkspace({
       setContactRemarks("");
       setCallResponseAction("");
       setScheduleContactMeeting(null);
+      setInterestedTransitionAction("");
+      setInterestedMeetingType("");
       setScheduledMeeting(null);
       setCompletionRequirement("");
       setCompletionBudget("");
@@ -1314,6 +1348,8 @@ export function LeadWorkspace({
     setContactRemarks("");
     setCallResponseAction("");
     setScheduleContactMeeting(null);
+    setInterestedTransitionAction("");
+    setInterestedMeetingType("");
     setTransitionFollowUpAt("");
     setTransitionNextAction("");
     setTransitionMeetingAt("");
@@ -1370,6 +1406,12 @@ export function LeadWorkspace({
     setContactRemarks(lead.remarks ?? "");
     setCallResponseAction("");
     setScheduleContactMeeting(null);
+    setInterestedTransitionAction("");
+    setInterestedMeetingType("");
+    if (lead.stage === "CONTACTED" && targetStage === "INTERESTED") {
+      setLostReasonType("");
+      setOtherLostReason("");
+    }
     setScheduledMeeting(null);
     setLoadingScheduledMeeting(
       lead.stage === "INTERESTED" && targetStage === "MEETING",
@@ -2210,7 +2252,7 @@ export function LeadWorkspace({
                   {stageEditNeedsContact
                     ? stageEditNeedsInitialCall
                       ? `Complete call with ${stageEditLead.customerName}`
-                      : `Qualify ${stageEditLead.customerName}`
+                      : `Next action for ${stageEditLead.customerName}`
                     : stageEditNeedsMeeting
                       ? loadingScheduledMeeting
                         ? `Checking meeting for ${stageEditLead.customerName}`
@@ -2283,136 +2325,93 @@ export function LeadWorkspace({
                   }
                 />
               )}
-              {stageEditNeedsContact && !stageEditNeedsInitialCall && (
+              {stageEditNeedsFollowUpPlan && (
                 <>
-                  <section className="lead-form-section form-wide">
-                    <div>
-                      <h3>Contact record</h3>
-                      <p>Record how the customer responded</p>
-                    </div>
-                    <div className="lead-form-fields">
-                      <label>
-                        Contact Date *
-                        <input
-                          required
-                          type="date"
-                          value={contactDate}
-                          onChange={(event) =>
-                            setContactDate(event.target.value)
-                          }
-                        />
-                      </label>
-                      <label>
-                        Contact Type *
+                  <label className="form-wide">
+                    Next action *
+                    <select
+                      required
+                      value={interestedTransitionAction}
+                      onChange={(event) => {
+                        const action = event.target.value as
+                          | ""
+                          | "INTERESTED"
+                          | "LOST";
+                        setInterestedTransitionAction(action);
+                        setTransitionMeetingAt("");
+                        setInterestedMeetingType("");
+                        if (action === "LOST") {
+                          setLostReasonType("");
+                          setOtherLostReason("");
+                        }
+                      }}
+                    >
+                      <option value="">Choose next action</option>
+                      <option value="INTERESTED">Interested</option>
+                      <option value="LOST">Lost</option>
+                    </select>
+                  </label>
+                  {interestedTransitionAction === "INTERESTED" && (
+                    <>
+                      <ClockDateTimePicker
+                        className="form-wide"
+                        label="Meeting date and time"
+                        required
+                        minValue={`${localDateInputValue()}T00:00`}
+                        value={transitionMeetingAt}
+                        onChange={setTransitionMeetingAt}
+                      />
+                      <label className="form-wide">
+                        Meeting type *
                         <select
                           required
-                          value={contactType}
+                          value={interestedMeetingType}
                           onChange={(event) =>
-                            setContactType(
-                              event.target
-                                .value as (typeof CONTACT_TYPES)[number],
-                            )
+                            setInterestedMeetingType(event.target.value)
                           }
                         >
-                          {CONTACT_TYPES.map((type) => (
-                            <option key={type} value={type}>
-                              {type}
+                          <option value="">Choose a meeting type</option>
+                          {MEETING_TYPES.map((meetingType) => (
+                            <option key={meetingType} value={meetingType}>
+                              {meetingType}
                             </option>
                           ))}
                         </select>
                       </label>
-                      <label className="form-wide">
-                        Customer Response *
-                        <textarea
-                          required
-                          rows={2}
-                          value={customerResponse}
-                          onChange={(event) =>
-                            setCustomerResponse(event.target.value)
-                          }
-                        />
-                      </label>
-                    </div>
-                  </section>
-                  {stageEditNeedsFollowUpPlan && (
+                    </>
+                  )}
+                  {interestedTransitionAction === "LOST" && (
                     <>
-                      <section className="lead-form-section form-wide">
-                        <div>
-                          <h3>Opportunity qualification</h3>
-                          <p>
-                            Review and update the customer's existing details
-                          </p>
-                        </div>
-                        <div className="lead-form-fields">
-                          <label className="form-wide">
-                            Requirement
-                            <textarea
-                              rows={2}
-                              value={contactRequirement}
-                              onChange={(event) =>
-                                setContactRequirement(event.target.value)
-                              }
-                            />
-                          </label>
-                          <label>
-                            Budget
-                            <input
-                              min="0"
-                              step="0.01"
-                              type="number"
-                              value={contactBudget}
-                              onChange={(event) =>
-                                setContactBudget(event.target.value)
-                              }
-                            />
-                          </label>
-                          <label>
-                            Expected Timeline
-                            <input
-                              value={expectedTimeline}
-                              onChange={(event) =>
-                                setExpectedTimeline(event.target.value)
-                              }
-                            />
-                          </label>
-                          <label className="form-wide">
-                            Remarks
-                            <textarea
-                              rows={2}
-                              value={contactRemarks}
-                              onChange={(event) =>
-                                setContactRemarks(event.target.value)
-                              }
-                            />
-                          </label>
-                        </div>
-                      </section>
-                      <section className="lead-form-section form-wide">
-                        <div>
-                          <h3>Follow-up plan</h3>
-                          <p>Set the next step and when it should happen</p>
-                        </div>
-                        <div className="lead-form-fields">
-                          <ClockDateTimePicker
-                            className="form-wide"
-                            label="Follow-up"
+                      <label className="form-wide">
+                        Lost reason *
+                        <select
+                          required
+                          value={lostReasonType}
+                          onChange={(event) => {
+                            setLostReasonType(event.target.value);
+                            setOtherLostReason("");
+                          }}
+                        >
+                          <option value="">Choose a lost reason</option>
+                          {LOST_REASONS.map((reason) => (
+                            <option key={reason} value={reason}>
+                              {reason}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {lostReasonType === "Other" && (
+                        <label className="form-wide">
+                          Other lost reason *
+                          <input
                             required
-                            value={transitionFollowUpAt}
-                            onChange={setTransitionFollowUpAt}
+                            value={otherLostReason}
+                            onChange={(event) =>
+                              setOtherLostReason(event.target.value)
+                            }
                           />
-                          <label>
-                            Next Action *
-                            <input
-                              required
-                              value={transitionNextAction}
-                              onChange={(event) =>
-                                setTransitionNextAction(event.target.value)
-                              }
-                              placeholder="e.g. Send proposal and call to discuss"
-                            />
-                          </label>
-                        </div>
-                      </section>
+                        </label>
+                      )}
                     </>
                   )}
                 </>
@@ -2945,7 +2944,9 @@ export function LeadWorkspace({
               <div className="form-footer">
                 <p>
                   {stageEditNeedsContact
-                    ? "Contact date, contact type, and customer response are required."
+                    ? stageEditNeedsFollowUpPlan
+                      ? "Choose Interested to schedule a meeting, or Lost."
+                      : "Contact date, contact type, and customer response are required."
                     : stageEditNeedsMeeting
                       ? scheduledMeeting
                         ? "Complete the scheduled meeting with its next action."
@@ -3005,7 +3006,11 @@ export function LeadWorkspace({
                       : stageEditNeedsContact
                         ? stageEdit.stage === "CONTACTED"
                           ? "Save contact and move to Contacted"
-                          : "Save qualification and move to Interested"
+                          : interestedTransitionAction === "LOST"
+                            ? "Move to Lost"
+                            : interestedTransitionAction === "INTERESTED"
+                              ? "Schedule meeting and move to Interested"
+                              : "Continue"
                         : stageEditNeedsMeeting
                           ? scheduledMeeting
                             ? "Complete meeting"

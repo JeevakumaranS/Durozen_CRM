@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
@@ -68,4 +69,22 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsString()
   expectedTimeline?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  scheduleMeeting?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  meetingAt?: string;
+
+  @IsOptional()
+  @IsIn([
+    "Online Meeting",
+    "Offline Meeting",
+    "Product Demo",
+    "Requirement Discussion",
+    "Business Discussion",
+  ])
+  meetingType?: string;
 }

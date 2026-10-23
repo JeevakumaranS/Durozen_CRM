@@ -19,12 +19,6 @@ import {
   formatBusinessDateTime,
 } from "../../lib/business-time";
 
-type LeadOption = {
-  id: string;
-  customerName: string;
-  stage: string;
-  assignedBde: { fullName: string };
-};
 type Assignee = { id: string; fullName: string };
 type FollowUp = {
   id: string;
@@ -72,6 +66,7 @@ const FOLLOW_UP_STATUSES: FollowUpStatus[] = [
   "PENDING",
   "COMPLETED",
 ];
+const FOLLOW_UP_TYPES = ["Negotiation"];
 const RESCHEDULE_REASONS = [
   "Customer requested",
   "Customer unavailable",
@@ -82,8 +77,6 @@ const NEGOTIATION_PAYMENT_STATUSES = [
   "Fully Paid",
   "Not Paid",
 ] as const;
-const PROPOSAL_TYPES = ["Proposal Follow-up"];
-const NEGOTIATION_TYPES = ["Negotiation"];
 const businessInputValue = businessDateTimeInputValue;
 const businessDateTimeIso = businessDateTimeToIso;
 const formatDate = formatBusinessDateTime;
@@ -99,10 +92,9 @@ export function NegotiationWorkspace() {
   const itemPlural = isNegotiation ? "negotiations" : "proposals";
   const itemTitle = isNegotiation ? "Negotiation" : "Proposal";
   const workspaceTitle = isNegotiation ? "Negotiations" : "Proposals";
-  const types = isNegotiation ? NEGOTIATION_TYPES : PROPOSAL_TYPES;
+  const types = FOLLOW_UP_TYPES;
   const [page, setPage] = useState(1);
   const [items, setItems] = useState<FollowUp[]>([]);
-  const [leads, setLeads] = useState<LeadOption[]>([]);
   const [assignees, setAssignees] = useState<Assignee[]>([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -122,17 +114,7 @@ export function NegotiationWorkspace() {
   const [to, setTo] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [leadId, setLeadId] = useState("");
-  const [dueAt, setDueAt] = useState(
-    businessInputValue(new Date(Date.now() + 86400000)),
-  );
-  const [type, setType] = useState(
-    isNegotiation ? "Negotiation" : "Proposal Follow-up",
-  );
-  const [nextAction, setNextAction] = useState("");
-  const [remarks, setRemarks] = useState("");
   const [editing, setEditing] = useState<{
     id: string;
     status: FollowUp["status"];
@@ -240,36 +222,46 @@ export function NegotiationWorkspace() {
   }, [search]);
 
   useEffect(() => {
-    Promise.all([
-      apiClient<LeadOption[]>("/leads"),
-      apiClient<Assignee[]>("/leads/assignees"),
-    ])
-      .then(([leadRows, authorizedAssignees]) => {
-        setLeads(
-          leadRows.filter(
-            (lead) =>
-              !["WON", "LOST"].includes(lead.stage) &&
-              (!isNegotiation || lead.stage === "NEGOTIATION"),
-          ),
-        );
-        setAssignees(authorizedAssignees);
-      })
+    apiClient<Assignee[]>("/leads/assignees")
+      .then(setAssignees)
       .catch((reason: unknown) => {
         notify(
           reason instanceof Error
             ? reason.message
-            : `Unable to load ${itemLabel} options.`,
+            : "Unable to load BDE options.",
           "error",
         );
       });
-  }, [isNegotiation, itemLabel]);
+  }, []);
+
+  function hasPendingResponse(item: FollowUp) {
+    return (
+      item.status === "COMPLETED" &&
+      (isNegotiation
+        ? item.type === "Negotiation" &&
+          Boolean(
+            item.lead.negotiations?.length &&
+              !item.lead.negotiations[0].responseSavedAt,
+          )
+        : item.type === "Proposal Follow-up" &&
+          Boolean(item.proposal && !item.proposal.responseSavedAt))
+    );
+  }
 
   const pageSize = 10;
   const orderedItems = [...items].sort(
-    (first, second) =>
-      Number(first.status !== "PENDING") -
-        Number(second.status !== "PENDING") ||
-      new Date(first.dueAt).getTime() - new Date(second.dueAt).getTime(),
+    (first, second) => {
+      const priority = (item: FollowUp) =>
+        item.status === "PENDING"
+          ? 0
+          : hasPendingResponse(item)
+            ? 1
+            : 2;
+      return (
+        priority(first) - priority(second) ||
+        new Date(first.dueAt).getTime() - new Date(second.dueAt).getTime()
+      );
+    },
   );
   const totalPages = Math.max(1, Math.ceil(orderedItems.length / pageSize));
   const visibleItems = orderedItems.slice(
@@ -283,44 +275,6 @@ export function NegotiationWorkspace() {
 
   function resetPage() {
     setPage(1);
-  }
-
-  async function createFollowUp(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!dueAt) {
-      notify("Choose a due date and time.", "error");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      await apiClient<FollowUp>("/follow-ups", {
-        method: "POST",
-        body: JSON.stringify({
-          leadId,
-          dueAt: businessDateTimeIso(dueAt),
-          type,
-          nextAction,
-          remarks: remarks || undefined,
-        }),
-      });
-      setShowCreate(false);
-      setType(isNegotiation ? "Negotiation" : "Proposal Follow-up");
-      setNextAction("");
-      setRemarks("");
-      notify(`${itemTitle} scheduled.`);
-      setPage(1);
-      await load();
-    } catch (reason) {
-      notify(
-        reason instanceof Error
-          ? reason.message
-          : `Unable to schedule ${itemLabel}.`,
-        "error",
-      );
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function updateFollowUp(item: FollowUp) {
@@ -626,9 +580,6 @@ export function NegotiationWorkspace() {
           <Link className="secondary-action" href="/leads">
             All leads
           </Link>
-          <button className="primary" onClick={() => setShowCreate(true)}>
-            + Schedule {itemLabel}
-          </button>
         </div>
       </header>
       <div className="follow-up-search-row">
@@ -857,8 +808,12 @@ export function NegotiationWorkspace() {
                     dueDayKey === todayKey
                   ? " due-today"
                   : "";
+            const responsePending = hasPendingResponse(item);
             return (
-              <article className={`follow-up-row${urgency}`} key={item.id}>
+              <article
+                className={`follow-up-row${urgency}${item.status === "PENDING" ? " pending-task" : ""}${responsePending ? " pending-response" : ""}`}
+                key={item.id}
+              >
                 <div className="follow-up-time">
                   <strong>{formatDate(item.dueAt)}</strong>
                   {urgency && (
@@ -1514,96 +1469,6 @@ export function NegotiationWorkspace() {
             </button>
           </div>
         </nav>
-      )}
-      {showCreate && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setShowCreate(false);
-          }}
-        >
-          <section
-            className="lead-modal follow-up-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="follow-up-title"
-          >
-            <div className="modal-heading">
-              <div>
-                <p className="eyebrow">CUSTOMER COMMITMENT</p>
-                <h2 id="follow-up-title">Schedule {itemLabel}</h2>
-              </div>
-              <button
-                className="modal-close"
-                aria-label="Close"
-                onClick={() => setShowCreate(false)}
-              >
-                ×
-              </button>
-            </div>
-            <form className="lead-form" onSubmit={createFollowUp}>
-              <label className="form-wide">
-                Lead *
-                <select
-                  required
-                  value={leadId}
-                  onChange={(event) => setLeadId(event.target.value)}
-                >
-                  <option value="">Select lead</option>
-                  {leads.map((lead) => (
-                    <option key={lead.id} value={lead.id}>
-                      {lead.customerName} · {lead.assignedBde.fullName}
-                    </option>
-                  ))}
-                </select>
-                {leads.length === 0 && (
-                  <small>No open leads are available in your authorized scope.</small>
-                )}
-              </label>
-              <label>
-                {itemTitle} type
-                <select
-                  value={type}
-                  onChange={(event) => setType(event.target.value)}
-                >
-                  {types.map((item) => (
-                    <option key={item}>{item}</option>
-                  ))}
-                </select>
-              </label>
-              <ClockDateTimePicker
-                className="form-wide"
-                label="Due"
-                required
-                value={dueAt}
-                onChange={setDueAt}
-              />
-              <label className="form-wide">
-                Next action *
-                <input
-                  required
-                  value={nextAction}
-                  onChange={(event) => setNextAction(event.target.value)}
-                />
-              </label>
-              <label className="form-wide">
-                Remarks
-                <textarea
-                  rows={2}
-                  value={remarks}
-                  onChange={(event) => setRemarks(event.target.value)}
-                />
-              </label>
-              <div className="form-footer">
-                <p>Scheduling updates the lead’s current next action.</p>
-                <button className="primary" disabled={busy || leads.length === 0}>
-                  {busy ? "Saving..." : "Schedule"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
       )}
     </main>
   );

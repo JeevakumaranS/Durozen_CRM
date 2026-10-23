@@ -7,9 +7,11 @@ import {
 import {
   LeadPriority,
   LeadStage as PrismaLeadStage,
+  MeetingStatus,
   Prisma,
 } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { formatBusinessDateTime } from "../../common/business-time";
 import {
   assertLeadHasNoOtherActiveWork,
   lockLeadActiveWork,
@@ -580,8 +582,34 @@ export class LeadsService {
     }
     const requiresContactDetails =
       (existing.stage === "NEW_LEAD" &&
-        ["CONTACTED", "INTERESTED"].includes(nextStage)) ||
-      (existing.stage === "CONTACTED" && nextStage === "INTERESTED");
+        ["CONTACTED", "INTERESTED"].includes(nextStage));
+    const schedulingMeeting =
+      existing.stage === "CONTACTED" && nextStage === "INTERESTED";
+    if (schedulingMeeting && !dto.scheduleMeeting) {
+      throw new BadRequestException(
+        "A meeting must be scheduled when moving a contacted lead to interested.",
+      );
+    }
+    if (
+      schedulingMeeting &&
+      dto.scheduleMeeting &&
+      (!dto.meetingAt || !dto.meetingType)
+    ) {
+      throw new BadRequestException(
+        "Meeting date, time, and type are required when scheduling a meeting.",
+      );
+    }
+    const meetingAt = dto.meetingAt ? new Date(dto.meetingAt) : undefined;
+    if (
+      schedulingMeeting &&
+      dto.scheduleMeeting &&
+      meetingAt &&
+      meetingAt.getTime() <= Date.now()
+    ) {
+      throw new BadRequestException(
+        "The meeting date and time must be in the future.",
+      );
+    }
     if (
       requiresContactDetails &&
       (!dto.contactDate?.trim() ||
@@ -593,11 +621,46 @@ export class LeadsService {
       );
     }
     const followUpChanged =
+      !(schedulingMeeting && dto.scheduleMeeting) &&
       (dto.followUpAt !== undefined &&
         new Date(dto.followUpAt).getTime() !==
           existing.followUpAt?.getTime()) ||
       (dto.nextAction !== undefined && dto.nextAction !== existing.nextAction);
     return this.prisma.$transaction(async (tx) => {
+      if (schedulingMeeting && dto.scheduleMeeting && meetingAt) {
+        await assertLeadHasNoOtherActiveWork(tx, id);
+        const meetingNextAction = "Attend scheduled meeting";
+        const meeting = await tx.meeting.create({
+          data: {
+            leadId: id,
+            meetingAt,
+            status: MeetingStatus.SCHEDULED,
+            type: dto.meetingType!,
+            requirement: dto.requirement ?? existing.requirement,
+            discussionNotes: dto.remarks,
+            nextAction: meetingNextAction,
+            followUpAt: meetingAt,
+          },
+        });
+        await tx.followUp.create({
+          data: {
+            leadId: id,
+            meetingId: meeting.id,
+            dueAt: meetingAt,
+            type: "Meeting",
+            nextAction: meetingNextAction,
+          },
+        });
+        await tx.activity.create({
+          data: {
+            leadId: id,
+            meetingId: meeting.id,
+            userId: user.sub,
+            type: "MEETING_SCHEDULED",
+            description: `${meeting.type} scheduled for ${formatBusinessDateTime(meetingAt)}`,
+          },
+        });
+      }
       if (
         followUpChanged ||
         nextStage === "WON" ||
@@ -624,8 +687,16 @@ export class LeadsService {
               : new Prisma.Decimal(dto.estimatedBudget),
         assignedBdeId: dto.assignedBdeId,
         stage: nextStage,
-        nextAction: dto.nextAction,
-        followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : undefined,
+        nextAction:
+          schedulingMeeting && dto.scheduleMeeting
+            ? "Attend scheduled meeting"
+            : dto.nextAction,
+        followUpAt:
+          schedulingMeeting && dto.scheduleMeeting
+            ? meetingAt
+            : dto.followUpAt
+              ? new Date(dto.followUpAt)
+              : undefined,
         remarks: dto.remarks,
         requirement: dto.requirement,
         finalDealValue: dto.finalDealValue,

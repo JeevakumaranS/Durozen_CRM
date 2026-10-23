@@ -20,7 +20,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiClient<T>(path: string, init: RequestInit = {}) {
+export async function apiClientResponse(path: string, init: RequestInit = {}) {
   const token = getAccessToken();
   const response = await fetch(`${getApiUrl()}${path}`, {
     ...init,
@@ -69,6 +69,11 @@ export async function apiClient<T>(path: string, init: RequestInit = {}) {
   ) {
     window.dispatchEvent(new Event(API_DATA_CHANGED_EVENT));
   }
+  return response;
+}
+
+export async function apiClient<T>(path: string, init: RequestInit = {}) {
+  const response = await apiClientResponse(path, init);
   return response.json() as Promise<T>;
 }
 

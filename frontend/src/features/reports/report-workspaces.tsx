@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { apiClient, getApiUrl } from "../../lib/api-client";
+import { apiClient, apiClientResponse } from "../../lib/api-client";
 import { notify } from "../../lib/notifications";
-import { getAccessToken, getAuthUser } from "../../lib/auth";
+import { getAuthUser } from "../../lib/auth";
 import {
   ReportChart,
   ReportChartSelector,
@@ -380,10 +380,7 @@ async function downloadReport(
     format,
     ...filters,
   });
-  const response = await fetch(`${getApiUrl()}/exports/${type}?${query}`, {
-    headers: { Authorization: `Bearer ${getAccessToken() ?? ""}` },
-  });
-  if (!response.ok) throw new Error(await response.text());
+  const response = await apiClientResponse(`/exports/${type}?${query}`);
   const file = URL.createObjectURL(await response.blob());
   const anchor = document.createElement("a");
   anchor.href = file;

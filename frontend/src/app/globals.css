@@ -2824,6 +2824,10 @@ button:focus-visible {
   padding: 10px;
   border-bottom: 1px solid #edf1f0;
 }
+.follow-up-row.pending-task {
+  border-left: 3px solid #d5a044;
+  background: #fffdf7;
+}
 .follow-up-row.overdue {
   border-left: 3px solid #c85b51;
   background: #fffaf9;
@@ -2831,6 +2835,10 @@ button:focus-visible {
 .follow-up-row.due-today {
   border-left: 3px solid #d5a044;
   background: #fffdf7;
+}
+.follow-up-row.pending-response {
+  border-left: 3px solid #6c63a8;
+  background: #f5f3ff;
 }
 .follow-up-row:last-child {
   border-bottom: 0;
