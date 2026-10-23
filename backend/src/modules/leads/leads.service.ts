@@ -70,7 +70,19 @@ export class LeadsService {
         ...(stage ? { stage: stage as PrismaLeadStage } : {}),
         ...leadScope(user),
       },
-      include: { assignedBde: { select: { id: true, fullName: true } } },
+      include: {
+        assignedBde: { select: { id: true, fullName: true } },
+        proposals: {
+          select: { finalAmount: true },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+        negotiations: {
+          select: { negotiatedAmount: true },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
       orderBy: [{ followUpAt: "asc" }, { createdAt: "desc" }],
     });
   }

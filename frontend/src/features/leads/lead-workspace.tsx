@@ -83,6 +83,9 @@ type Lead = {
   mobileNumber: string;
   requirement?: string | null;
   estimatedBudget?: string | number | null;
+  finalDealValue?: string | number | null;
+  proposals?: { finalAmount?: string | number | null }[];
+  negotiations?: { negotiatedAmount?: string | number | null }[];
   priority: Priority;
   stage: Stage;
   nextAction?: string | null;
@@ -476,7 +479,7 @@ export function LeadWorkspace({
           leadSource: form.leadSource,
           priority: form.priority,
           assignedBdeId: form.assignedBdeId,
-          stage: form.stage,
+          stage: "NEW_LEAD",
           nextAction: form.nextAction,
           leadDate: new Date(`${form.leadDate}T00:00:00.000Z`).toISOString(),
           estimatedBudget: form.estimatedBudget
@@ -503,7 +506,7 @@ export function LeadWorkspace({
       setShowForm(false);
       setOriginalAssignedBdeId("");
       setOriginalAssignedBdeName("");
-      notify(`Lead created in ${stageName(form.stage)} stage.`);
+      notify("Lead created in New Lead stage.");
       await load();
       if (initialShowForm) router.replace("/leads");
     } catch (error) {
@@ -1936,10 +1939,28 @@ export function LeadWorkspace({
                         <span>BDE</span>
                         <strong>{lead.assignedBde.fullName}</strong>
                       </div>
-                      <div className="lead-card-meta">
-                        <span>Budget</span>
-                        <strong>{displayMoney(lead.estimatedBudget)}</strong>
-                      </div>
+                      {["PROPOSAL", "NEGOTIATION", "WON"].includes(
+                        lead.stage,
+                      ) && (
+                        <div className="lead-card-meta">
+                          <span>
+                            {lead.stage === "PROPOSAL"
+                              ? "Proposed amount"
+                              : "Final deal value"}
+                          </span>
+                          <strong>
+                            {lead.stage === "PROPOSAL"
+                              ? displayMoney(
+                                  lead.proposals?.[0]?.finalAmount,
+                                )
+                              : lead.stage === "NEGOTIATION"
+                                ? displayMoney(
+                                    lead.negotiations?.[0]?.negotiatedAmount,
+                                  )
+                                : displayMoney(lead.finalDealValue)}
+                          </strong>
+                        </div>
+                      )}
                       <div className="lead-card-meta">
                         <span>Next follow-up</span>
                         <strong>{displayDate(lead.followUpAt)}</strong>
@@ -2055,13 +2076,12 @@ export function LeadWorkspace({
               <thead>
                 <tr>
                   <th>Customer</th>
-                  <th>Company / Requirement</th>
+                  <th>Company Name</th>
                   <th>Stage</th>
                   {view === "pipeline" && <th>Move stage</th>}
                   <th>Priority</th>
-                  <th>Assigned BDE</th>
+                  <th className="lead-assigned-bde-column">Assigned BDE</th>
                   <th>Next follow-up</th>
-                  <th>Budget</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -2074,7 +2094,7 @@ export function LeadWorkspace({
                       </Link>
                       <small>{lead.mobileNumber}</small>
                     </td>
-                    <td>{lead.businessName || lead.requirement || "—"}</td>
+                    <td>{lead.businessName || "—"}</td>
                     <td>
                       <span className="stage-pill">
                         {stageName(lead.stage)}
@@ -2140,10 +2160,11 @@ export function LeadWorkspace({
                         {lead.priority}
                       </span>
                     </td>
-                    <td>
+                    <td className="lead-assigned-bde-column">
                       {canAssignLeads && view !== "pipeline" ? (
                         <select
                           aria-label={`BDE assigned to ${lead.customerName}`}
+                          className="lead-assigned-bde-select"
                           value={lead.assignedBde.id}
                           onChange={(event) =>
                             void assignLead(lead, event.target.value)
@@ -2163,7 +2184,6 @@ export function LeadWorkspace({
                       {displayDate(lead.followUpAt)}
                       <small>{lead.nextAction}</small>
                     </td>
-                    <td>{displayMoney(lead.estimatedBudget)}</td>
                     <td className="lead-row-actions">
                       <button
                         className="lead-edit"
@@ -3281,14 +3301,10 @@ export function LeadWorkspace({
                 </div>
                 <div className="lead-form-fields">
                   <label>
-                    Current Stage {editingLeadId ? "" : "*"}
+                    Current Stage
                     <select
-                      required={!editingLeadId}
-                      disabled={Boolean(editingLeadId)}
-                      value={form.stage}
-                      onChange={(event) =>
-                        setForm({ ...form, stage: event.target.value as Stage })
-                      }
+                      disabled
+                      value={editingLeadId ? form.stage : "NEW_LEAD"}
                     >
                       {STAGES.map((stage) => (
                         <option key={stage} value={stage}>
