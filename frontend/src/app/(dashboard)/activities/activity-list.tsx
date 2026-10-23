@@ -468,10 +468,19 @@ export function ActivitiesPage({
         </label>
         <MobileFilterToggle
           expanded={mobileFiltersOpen}
+          active={
+            callsOnly
+              ? callStatusFilters.length > 0 ||
+                (callDateFilterEnabled && Boolean(callDateFrom || callDateTo))
+              : Boolean(type)
+          }
           onToggle={() => setMobileFiltersOpen((open) => !open)}
         />
         {!callsOnly && (
-          <MobileFilterContent expanded={mobileFiltersOpen}>
+          <MobileFilterContent
+            expanded={mobileFiltersOpen}
+            onClose={() => setMobileFiltersOpen(false)}
+          >
             <label>
               Activity type
               <select
@@ -502,7 +511,10 @@ export function ActivitiesPage({
               aria-label="Filter calls and messages"
               className={`follow-up-filters${mobileFiltersOpen ? "" : " mobile-filter-closed"}`}
             >
-              <MobileFilterContent expanded={mobileFiltersOpen}>
+              <MobileFilterContent
+                expanded={mobileFiltersOpen}
+                onClose={() => setMobileFiltersOpen(false)}
+              >
               <h2>Filter Calls &amp; Msg</h2>
               <div className="follow-up-filter-options">
                 <div className="follow-up-filter-option">

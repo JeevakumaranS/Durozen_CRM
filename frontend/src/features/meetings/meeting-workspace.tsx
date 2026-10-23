@@ -516,6 +516,10 @@ export function MeetingWorkspace() {
         </label>
         <MobileFilterToggle
           expanded={mobileFiltersOpen}
+          active={
+            statuses.length > 0 ||
+            (dateFilterEnabled && Boolean(from || to))
+          }
           onToggle={() => setMobileFiltersOpen((open) => !open)}
         />
       </div>
@@ -524,7 +528,10 @@ export function MeetingWorkspace() {
             aria-label="Filter meetings"
             className={`follow-up-filters${mobileFiltersOpen ? "" : " mobile-filter-closed"}`}
           >
-            <MobileFilterContent expanded={mobileFiltersOpen}>
+            <MobileFilterContent
+              expanded={mobileFiltersOpen}
+              onClose={() => setMobileFiltersOpen(false)}
+            >
             <h2>Filter Meetings</h2>
             <div className="follow-up-filter-options">
               <div className="follow-up-filter-option">

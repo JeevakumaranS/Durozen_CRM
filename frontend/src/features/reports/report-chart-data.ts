@@ -37,12 +37,12 @@ const lineRowFields: Record<
   "bde-performance": { labelField: "name", metricField: "totalLeads" },
   leads: { labelField: "customerName" },
   "lead-aging": { labelField: "customerName" },
-  pipeline: { labelField: "customerName", metricField: "estimatedBudget" },
+  pipeline: { labelField: "stage" },
   "follow-ups": { labelField: "lead.customerName" },
   proposals: { labelField: "proposalNumber", metricField: "finalAmount" },
   "won-lost": { labelField: "customerName", metricField: "finalDealValue" },
   revenue: { labelField: "customerName", metricField: "finalDealValue" },
-  "lost-leads": { labelField: "customerName", metricField: "finalDealValue" },
+  "lost-leads": { labelField: "lostReason" },
 };
 
 const trendMappings: Record<
@@ -199,6 +199,19 @@ export function buildLineCategoryData(
 ): LineCategoryPoint[] {
   const mapping = lineRowFields[apiType];
   if (!mapping) return [];
+
+  if (apiType === "lost-leads") {
+    const counts = new Map<string, number>();
+    for (const row of rows) {
+      const rawReason = readValue(row, mapping.labelField);
+      const reason =
+        typeof rawReason === "string" && rawReason.trim()
+          ? rawReason.trim()
+          : "Not recorded";
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([name, value]) => ({ name, value }));
+  }
 
   const labelCounts = new Map<string, number>();
   return rows.flatMap((row, index) => {

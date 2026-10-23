@@ -32,6 +32,21 @@ test("line chart disambiguates duplicate record labels and skips invalid metrics
   ]);
 });
 
+test("lost lead line chart counts leads by lost reason", () => {
+  const points = buildLineCategoryData("lost-leads", [
+    { lostReason: "Price", finalDealValue: 1000 },
+    { lostReason: "Price", finalDealValue: 2000 },
+    { lostReason: "No response", finalDealValue: 500 },
+    { lostReason: null, finalDealValue: 300 },
+  ]);
+
+  assert.deepEqual(points, [
+    { name: "Price", value: 2 },
+    { name: "No response", value: 1 },
+    { name: "Not recorded", value: 1 },
+  ]);
+});
+
 test("daily report trends aggregate duplicate dates and sort chronologically", () => {
   const trend = buildTrendData("revenue", [
     { stageEnteredAt: "2026-10-12T05:00:00.000Z", finalDealValue: "1250" },

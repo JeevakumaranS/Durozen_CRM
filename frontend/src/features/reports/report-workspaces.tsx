@@ -100,17 +100,10 @@ function ReportPagination({
 const reportTypes = [
   {
     slug: "bde-performance",
-    title: "BDE Performance",
+    title: "BDE Performance Report",
     description:
-      "BDE-wise leads, activities, follow-ups, meetings, proposals, won/lost deals, and revenue.",
+      "BDE-wise leads, activities, follow-ups, meetings, proposals, won, lost, and revenue.",
     apiType: "bde-performance",
-  },
-  {
-    slug: "sales-performance",
-    title: "Sales Performance",
-    description:
-      "Sales activity, conversion, and revenue summary for the selected period.",
-    apiType: "monthly-summary",
   },
   {
     slug: "lead-report",
@@ -119,23 +112,10 @@ const reportTypes = [
     apiType: "leads",
   },
   {
-    slug: "won-lost-report",
-    title: "Won/Lost Report",
-    description: "Won and lost leads by the date they entered the outcome stage.",
-    apiType: "won-lost",
-  },
-  {
     slug: "revenue-report",
     title: "Revenue Report",
     description: "Revenue details from won deals in the selected period.",
     apiType: "revenue",
-  },
-  {
-    slug: "lead-aging-report",
-    title: "Lead Aging Report",
-    description:
-      "Current stage duration, latest activity, and next follow-up for leads.",
-    apiType: "lead-aging",
   },
   {
     slug: "pipeline-report",
@@ -161,6 +141,15 @@ const reportTypes = [
     description: "Lost opportunities grouped by their recorded reason.",
     apiType: "lost-leads",
   },
+] as const;
+
+const pipelineStages = [
+  "NEW_LEAD",
+  "CONTACTED",
+  "INTERESTED",
+  "MEETING",
+  "PROPOSAL",
+  "NEGOTIATION",
 ] as const;
 
 const reportAccessStorageKey = (userId: string | undefined) =>
@@ -274,7 +263,7 @@ const reportColumns: Record<string, ReportColumn[]> = {
     { key: "lead.assignedBde.fullName", label: "Assigned BDE" },
     { key: "proposalDate", label: "Proposal Date", format: "date" },
     { key: "finalAmount", label: "Proposal Value", format: "money" },
-    { key: "customerResponse", label: "Status / Response" },
+    { key: "negotiatedAmount", label: "Negotiated Amount", format: "money" },
   ],
   "won-lost": [
     { key: "customerName", label: "Lead / Deal" },
@@ -343,9 +332,17 @@ const oneMonthBefore = (value: string) => {
   );
 };
 
-function reportValue(row: ReportRow, key: string): unknown {
+function reportValue(
+  row: ReportRow,
+  key: string,
+): unknown {
   if (key === "contactInformation") {
     return [row.mobileNumber, row.email].filter(Boolean).join(" · ") || null;
+  }
+  if (key === "negotiatedAmount") {
+    const lead = row.lead as ReportRow | undefined;
+    const negotiations = lead?.negotiations as ReportRow[] | undefined;
+    return negotiations?.[0]?.negotiatedAmount ?? "-";
   }
   if (key === "latestActivity") {
     const lead = row.lead as ReportRow | undefined;
@@ -360,6 +357,7 @@ function reportValue(row: ReportRow, key: string): unknown {
 
 function formatReportValue(value: unknown, format?: ReportColumn["format"]) {
   if (value === null || value === undefined || value === "") return "—";
+  if (value === "-") return "-";
   if (format === "date") {
     const date = new Date(String(value));
     return Number.isNaN(date.getTime())
@@ -765,7 +763,6 @@ export function ReportDetailWorkspace() {
     report !== undefined &&
     ![
       "bde-performance",
-      "sales-performance",
       "follow-up-report",
     ].includes(report.slug);
 
@@ -786,15 +783,9 @@ export function ReportDetailWorkspace() {
     () => ({
       ...(from ? { from } : {}),
       ...(to ? { to } : {}),
-      ...(assignedBdeId &&
-      report?.apiType !== "monthly-summary" &&
-      user?.role !== "BDE"
-        ? { assignedBdeId }
-        : {}),
+      ...(assignedBdeId && user?.role !== "BDE" ? { assignedBdeId } : {}),
       ...(stage &&
-      ["leads", "pipeline", "won-lost", "lead-aging"].includes(
-        report?.apiType ?? "",
-      )
+      ["leads", "pipeline"].includes(report?.apiType ?? "")
         ? { stage }
         : {}),
       ...(followUpCategory && report?.apiType === "follow-ups"
@@ -832,11 +823,7 @@ export function ReportDetailWorkspace() {
   }, [page, totalPages]);
 
   useEffect(() => {
-    if (
-      !report ||
-      user?.role === "BDE" ||
-      report.apiType === "monthly-summary"
-    ) {
+    if (!report || user?.role === "BDE") {
       setBdeOptions([]);
       return;
     }
@@ -872,20 +859,13 @@ export function ReportDetailWorkspace() {
       setError("");
       setRows([]);
       try {
-        if (activeReport.slug === "sales-performance") {
-          const summary = await apiClient<MonthlySummary>(
-            `/reports/monthly-summary?${new URLSearchParams(filters)}`,
-          );
-          if (!cancelled) setRows([{ ...summary }]);
-        } else {
-          const query = new URLSearchParams({
-            ...filters,
-          });
-          const data = await apiClient<ReportRow[]>(
-            `/reports/${activeReport.apiType}?${query}`,
-          );
-          if (!cancelled) setRows(data);
-        }
+        const query = new URLSearchParams({
+          ...filters,
+        });
+        const data = await apiClient<ReportRow[]>(
+          `/reports/${activeReport.apiType}?${query}`,
+        );
+        if (!cancelled) setRows(data);
       } catch (reason: unknown) {
         if (cancelled) return;
         setRows([]);
@@ -984,6 +964,13 @@ export function ReportDetailWorkspace() {
       : report.apiType === "lost-leads"
         ? [["Lost leads", rows.length]]
         : [];
+  const pipelineStageCounts =
+    report.apiType === "pipeline"
+      ? pipelineStages.map((stage) => ({
+          stage,
+          count: rows.filter((row) => row.stage === stage).length,
+        }))
+      : [];
 
   return (
     <main
@@ -996,9 +983,7 @@ export function ReportDetailWorkspace() {
           <h1>{report.title}</h1>
           <p className="subtitle">{report.description}</p>
           <p className="report-print-meta">
-            {report.slug === "sales-performance" && !from && !to
-              ? "Period: Current month"
-              : `Date range: ${from || "Any"} to ${to || "Any"}`}
+            {`Date range: ${from || "Any"} to ${to || "Any"}`}
             {assignedBdeId
               ? ` · BDE: ${bdeOptions.find((option) => option.id === assignedBdeId)?.fullName ?? assignedBdeId}`
               : ""}
@@ -1052,9 +1037,7 @@ export function ReportDetailWorkspace() {
               />
             </label>
           </div>
-          {["leads", "pipeline", "won-lost", "lead-aging"].includes(
-            report.apiType,
-          ) && (
+          {["leads", "pipeline"].includes(report.apiType) && (
             <label>
               Stage
               <select
@@ -1062,27 +1045,25 @@ export function ReportDetailWorkspace() {
                 value={stage}
               >
                 <option value="">All stages</option>
-                {(report.apiType === "won-lost"
-                  ? ["WON", "LOST"]
-                  : report.apiType === "leads"
-                    ? [
-                        "NEW_LEAD",
-                        "CONTACTED",
-                        "INTERESTED",
-                        "MEETING",
-                        "PROPOSAL",
-                        "NEGOTIATION",
-                        "WON",
-                        "LOST",
-                      ]
-                    : [
-                        "NEW_LEAD",
-                        "CONTACTED",
-                        "INTERESTED",
-                        "MEETING",
-                        "PROPOSAL",
-                        "NEGOTIATION",
-                      ]
+                {(report.apiType === "leads"
+                  ? [
+                      "NEW_LEAD",
+                      "CONTACTED",
+                      "INTERESTED",
+                      "MEETING",
+                      "PROPOSAL",
+                      "NEGOTIATION",
+                      "WON",
+                      "LOST",
+                    ]
+                  : [
+                      "NEW_LEAD",
+                      "CONTACTED",
+                      "INTERESTED",
+                      "MEETING",
+                      "PROPOSAL",
+                      "NEGOTIATION",
+                    ]
                 ).map((option) => (
                   <option key={option} value={option}>
                     {option.replaceAll("_", " ")}
@@ -1233,6 +1214,22 @@ export function ReportDetailWorkspace() {
           ))}
         </div>
       )}
+      {report.apiType === "pipeline" && !loading && !error && (
+        <section
+          aria-label="Pipeline leads by stage"
+          className="pipeline-stage-summary"
+        >
+          <h2>Leads by stage</h2>
+          <div className="summary-metrics pipeline-stage-metrics">
+            {pipelineStageCounts.map(({ stage, count }) => (
+              <article className="summary-metric" key={stage}>
+                <span>{stage.replaceAll("_", " ")}</span>
+                <strong>{count}</strong>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
       {loading && <p className="dashboard-loading">Loading report data...</p>}
       {chartType === "table" ? (
         <>
@@ -1248,31 +1245,35 @@ export function ReportDetailWorkspace() {
               <tbody>
                 {visibleRows.map((row, index) => (
                   <tr key={String(row.id ?? row.userId ?? index)}>
-                    {columns.map((column) => (
-                      <td
-                        key={column.key}
-                        title={String(reportValue(row, column.key) ?? "")}
-                      >
-                        {report.apiType === "leads" &&
+                    {columns.map((column) => {
+                      const value = reportValue(row, column.key);
+                      const title = String(value ?? "");
+                      if (
+                        report.apiType === "leads" &&
                         column.key === "customerName" &&
-                        typeof row.id === "string" ? (
-                          <Link
-                            href={`/reports/lead-report/${row.id}`}
-                            title={`View activity for ${String(row.customerName ?? "lead")}`}
-                          >
-                            {formatReportValue(
-                              reportValue(row, column.key),
-                              column.format,
-                            )}
-                          </Link>
-                        ) : (
-                          formatReportValue(
-                            reportValue(row, column.key),
-                            column.format,
-                          )
-                        )}
-                      </td>
-                    ))}
+                        typeof row.id === "string"
+                      ) {
+                        return (
+                          <td key={column.key} title={title}>
+                            <Link
+                              href={`/reports/lead-report/${row.id}`}
+                              title={`View activity for ${String(row.customerName ?? "lead")}`}
+                            >
+                              {formatReportValue(value, column.format)}
+                            </Link>
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={column.key} title={title}>
+                          {report.apiType === "proposals" &&
+                          column.key === "nextAction" &&
+                          value === ""
+                            ? ""
+                            : formatReportValue(value, column.format)}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>

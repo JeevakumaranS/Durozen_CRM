@@ -32,7 +32,6 @@ type ReportRow = Record<string, unknown>;
 export type ReportChartType =
   | "pie"
   | "column"
-  | "donut"
   | "bar"
   | "line"
   | "table"
@@ -60,7 +59,6 @@ type ReportChartSelectorProps = ReportChartProps & {
 const chartOptions: ChartOption[] = [
   { type: "pie", label: "Pie Chart" },
   { type: "column", label: "Column Chart" },
-  { type: "donut", label: "Donut Chart" },
   { type: "bar", label: "Bar Chart" },
   { type: "line", label: "Line Chart" },
   { type: "table", label: "Table" },
@@ -92,28 +90,24 @@ const categoryFields: Record<string, string> = {
 
 const metricFields: Record<string, string> = {
   "bde-performance": "totalLeads",
-  pipeline: "estimatedBudget",
   proposals: "finalAmount",
   "won-lost": "finalDealValue",
   revenue: "finalDealValue",
-  "lost-leads": "finalDealValue",
 };
 
 const metricLabels: Record<string, string> = {
   "bde-performance": "Total Leads",
-  pipeline: "Expected Deal Value",
+  pipeline: "Lead Count",
   proposals: "Proposal Value",
   "won-lost": "Deal Value",
   revenue: "Revenue",
-  "lost-leads": "Deal Value",
+  "lost-leads": "Lead Count",
 };
 
 const currencyMetricTypes = new Set([
   "revenue",
-  "pipeline",
   "proposals",
   "won-lost",
-  "lost-leads",
 ]);
 
 const summaryMetrics = [
@@ -239,12 +233,6 @@ function ChartTypeIcon({ type }: { type: ReportChartType }) {
       )}
       {type === "column" && (
         <path d="M3 20h18M5 18V9h3v9m4 0V4h3v14m4 0v-6h3v6" />
-      )}
-      {type === "donut" && (
-        <>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 3v9h9M12 12l6.4 6.4" />
-        </>
       )}
       {type === "bar" && (
         <path d="M4 4v16m0-13h15M4 11h10M4 18h17" />
@@ -458,6 +446,63 @@ function ChartDisplay({
   }
 
   if (type === "area") {
+    if (apiType === "lost-leads") {
+      if (categoryData.length === 0) {
+        return (
+          <div className={styles.chartEmpty}>
+            No lost reasons are available for this report and filter range.
+          </div>
+        );
+      }
+      return (
+        <div className={styles.chartCanvas} role="img" aria-label="Area chart">
+          <ResponsiveContainer height="100%" minHeight={280} width="100%">
+            <AreaChart
+              data={categoryData}
+              margin={{ top: 18, right: 24, left: 20, bottom: 24 }}
+            >
+              <CartesianGrid stroke="#e6ecec" strokeDasharray="3 3" />
+              <XAxis
+                dataKey="name"
+                interval={0}
+                angle={categoryData.length > 5 ? -25 : 0}
+                textAnchor={categoryData.length > 5 ? "end" : "middle"}
+                height={categoryData.length > 5 ? 64 : 48}
+                label={{
+                  value: "Lost Reason",
+                  position: "bottom",
+                  offset: 2,
+                  fill: "#52676e",
+                  fontSize: 11,
+                }}
+                tick={{ fill: "#52676e", fontSize: 11 }}
+              />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fill: "#52676e", fontSize: 11 }}
+                label={{
+                  value: "Lead Count",
+                  angle: -90,
+                  position: "insideLeft",
+                  fill: "#52676e",
+                  fontSize: 11,
+                }}
+              />
+              <Tooltip />
+              <Area
+                dataKey="value"
+                fill="#ed8f70"
+                fillOpacity={0.28}
+                name="Lead Count"
+                stroke="#ed8f70"
+                strokeWidth={3}
+                type="monotone"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
     if (!supportsTrend(apiType)) {
       return (
         <div className={styles.chartEmpty}>
@@ -485,7 +530,8 @@ function ChartDisplay({
 
   if (type === "line") {
     const chartLineData =
-      apiType === "monthly-summary"
+      apiType === "monthly-summary" ||
+      apiType === "pipeline"
         ? categoryData
         : buildLineCategoryData(apiType, rows);
     const orderedCategories = categoryOrders[apiType];
@@ -519,7 +565,7 @@ function ChartDisplay({
     const padding =
       span === 0 ? Math.max(Math.abs(maximum) * 0.1, 1) : span * 0.12;
     const lineDomain: [number, number] = [
-      minimum - padding,
+      apiType === "lost-leads" ? 0 : minimum - padding,
       maximum + padding,
     ];
     const isCurrencyMetric = currencyMetricTypes.has(apiType);
@@ -550,11 +596,15 @@ function ChartDisplay({
                       ? "BDE"
                       : apiType === "monthly-summary"
                         ? "Metric"
-                        : apiType === "proposals"
-                          ? "Proposal"
-                          : apiType === "follow-ups"
-                            ? "Lead"
-                            : "Lead / Deal",
+                        : apiType === "pipeline"
+                          ? "Pipeline Stage"
+                          : apiType === "lost-leads"
+                            ? "Lost Reason"
+                            : apiType === "proposals"
+                              ? "Proposal"
+                              : apiType === "follow-ups"
+                                ? "Lead"
+                                : "Lead / Deal",
                   position: "bottom",
                   offset: 2,
                   fill: "#52676e",
@@ -622,7 +672,7 @@ function ChartDisplay({
     );
   }
 
-  if (type === "pie" || type === "donut") {
+  if (type === "pie") {
     if (categoryData.every((category) => category.value <= 0)) {
       return (
         <div className={styles.chartEmpty}>
@@ -666,7 +716,6 @@ function ChartDisplay({
                 cx="50%"
                 cy="43%"
                 outerRadius="58%"
-                innerRadius={type === "donut" ? "42%" : 0}
                 minAngle={4}
                 paddingAngle={0}
               >
@@ -694,8 +743,13 @@ function ChartDisplay({
         {type === "bar" ? (
           <BarChart
             data={categoryData}
-            layout="vertical"
-            margin={{ top: 38, right: 20, left: 12, bottom: 14 }}
+            layout={apiType === "lost-leads" ? "horizontal" : "vertical"}
+            margin={{
+              top: 38,
+              right: 20,
+              left: 12,
+              bottom: apiType === "lost-leads" ? 24 : 14,
+            }}
           >
             <Legend
               align="center"
@@ -705,22 +759,56 @@ function ChartDisplay({
             />
             <CartesianGrid stroke="#e6ecec" strokeDasharray="3 3" />
             <XAxis
-              allowDecimals={false}
-              tick={{ fill: "#52676e", fontSize: 11 }}
-              type="number"
+              {...(apiType === "lost-leads"
+                ? {
+                    dataKey: "name",
+                    interval: 0 as const,
+                    angle: categoryData.length > 5 ? -25 : 0,
+                    textAnchor: categoryData.length > 5 ? "end" : "middle",
+                    height: categoryData.length > 5 ? 64 : 48,
+                    label: {
+                      value: "Lost Reason",
+                      position: "bottom" as const,
+                      offset: 2,
+                      fill: "#52676e",
+                      fontSize: 11,
+                    },
+                    tick: { fill: "#52676e", fontSize: 11 },
+                  }
+                : {
+                    allowDecimals: false,
+                    tick: { fill: "#52676e", fontSize: 11 },
+                    type: "number" as const,
+                  })}
             />
             <YAxis
-              dataKey="name"
-              tick={{ fill: "#52676e", fontSize: 11 }}
-              type="category"
-              width={120}
+              {...(apiType === "lost-leads"
+                ? {
+                    allowDecimals: false,
+                    tick: { fill: "#52676e", fontSize: 11 },
+                    label: {
+                      value: "Lead Count",
+                      angle: -90 as const,
+                      position: "insideLeft" as const,
+                      fill: "#52676e",
+                      fontSize: 11,
+                    },
+                  }
+                : {
+                    dataKey: "name",
+                    tick: { fill: "#52676e", fontSize: 11 },
+                    type: "category" as const,
+                    width: 120,
+                  })}
             />
             <Tooltip />
             <Bar
               dataKey="value"
               fill="#ed8f70"
               name={valueLabel}
-              radius={[0, 4, 4, 0]}
+              radius={
+                apiType === "lost-leads" ? [4, 4, 0, 0] : [0, 4, 4, 0]
+              }
             />
           </BarChart>
         ) : (
@@ -748,10 +836,32 @@ function ChartDisplay({
               height={categoryData.length > 4 ? 78 : 48}
               tickMargin={8}
               tick={{ fill: "#52676e", fontSize: 11 }}
+              label={
+                apiType === "lost-leads"
+                  ? {
+                      value: "Lost Reason",
+                      position: "bottom",
+                      offset: 2,
+                      fill: "#52676e",
+                      fontSize: 11,
+                    }
+                  : undefined
+              }
             />
             <YAxis
               allowDecimals={false}
               tick={{ fill: "#52676e", fontSize: 11 }}
+              label={
+                apiType === "lost-leads"
+                  ? {
+                      value: "Lead Count",
+                      angle: -90,
+                      position: "insideLeft",
+                      fill: "#52676e",
+                      fontSize: 11,
+                    }
+                  : undefined
+              }
             />
             <Tooltip />
             <Bar
@@ -798,15 +908,29 @@ export function ReportChartSelector({
   const [open, setOpen] = useState(false);
   const [pendingType, setPendingType] = useState(appliedType);
   const appliedOption =
-    chartOptions.find(({ type }) => type === appliedType) ?? chartOptions[5];
+    chartOptions.find(({ type }) => type === appliedType) ??
+    chartOptions[4];
   const temporalChartsAvailable = supportsTrend(apiType);
+  const lineChartsUnavailable = apiType === "follow-ups";
+  const tableOnly = apiType === "proposals";
+
+  function isOptionUnavailable(type: ReportChartType) {
+    return (
+      (tableOnly && type !== "table") ||
+      (lineChartsUnavailable && (type === "line" || type === "area")) ||
+      (type === "area" && !temporalChartsAvailable)
+    );
+  }
 
   function showSelector() {
-    setPendingType(appliedType);
+    setPendingType(
+      isOptionUnavailable(appliedType) ? "table" : appliedType,
+    );
     setOpen(true);
   }
 
   function applySelection() {
+    if (isOptionUnavailable(pendingType)) return;
     onApply(pendingType);
     setOpen(false);
   }
@@ -845,21 +969,24 @@ export function ReportChartSelector({
                   value={pendingType}
                 >
                   {chartOptions.map((option) => {
-                    const trendUnavailable =
-                      option.type === "area" && !temporalChartsAvailable;
+                    const unavailable = isOptionUnavailable(option.type);
                     return (
                       <option
-                        disabled={trendUnavailable}
+                        disabled={unavailable}
                         key={option.type}
                         title={
-                          trendUnavailable
-                            ? "This report has no suitable event date for a trend chart."
+                          unavailable
+                            ? tableOnly
+                              ? "Only the table view is available for proposal reports."
+                              : lineChartsUnavailable
+                              ? "Line and area charts are not available for follow-up reports."
+                              : "This report has no suitable event date for an area chart."
                             : undefined
                         }
                         value={option.type}
                       >
                         {option.label}
-                        {trendUnavailable ? " (not available)" : ""}
+                        {unavailable ? " (not available)" : ""}
                       </option>
                     );
                   })}
@@ -895,7 +1022,9 @@ export function ReportChartSelector({
               </button>
               <button
                 className={styles.viewButton}
-                disabled={loading || Boolean(error)}
+                disabled={
+                  loading || Boolean(error) || isOptionUnavailable(pendingType)
+                }
                 onClick={applySelection}
                 type="button"
               >

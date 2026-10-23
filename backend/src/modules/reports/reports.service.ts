@@ -276,6 +276,11 @@ export class ReportsService {
                 leadNumber: true,
                 customerName: true,
                 assignedBde: { select: { fullName: true } },
+                negotiations: {
+                  orderBy: { createdAt: "desc" },
+                  take: 1,
+                  select: { negotiatedAmount: true },
+                },
               },
             },
           },

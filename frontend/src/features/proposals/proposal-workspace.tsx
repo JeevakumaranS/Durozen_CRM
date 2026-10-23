@@ -602,6 +602,13 @@ export function ProposalWorkspace() {
         </label>
         <MobileFilterToggle
           expanded={mobileFiltersOpen}
+          active={
+            (enabledFilters.type && typeFilters.length > 0) ||
+            (enabledFilters.assignee && assignedBdeIds.length > 0) ||
+            statusFilters.length > 0 ||
+            pendingResponseOnly ||
+            (enabledFilters.date && Boolean(from || to))
+          }
           onToggle={() => setMobileFiltersOpen((open) => !open)}
         />
       </div>
@@ -610,7 +617,10 @@ export function ProposalWorkspace() {
           className={`follow-up-filters${mobileFiltersOpen ? "" : " mobile-filter-closed"}`}
           aria-label={`Filter ${itemPlural}`}
         >
-          <MobileFilterContent expanded={mobileFiltersOpen}>
+          <MobileFilterContent
+            expanded={mobileFiltersOpen}
+            onClose={() => setMobileFiltersOpen(false)}
+          >
           <h2>Filter {itemTitle}s</h2>
           <div className="follow-up-filter-options">
             <div className="follow-up-filter-option">
