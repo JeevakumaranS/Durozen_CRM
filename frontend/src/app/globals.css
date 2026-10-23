@@ -4509,6 +4509,21 @@ td {
   width: 100%;
   max-width: 220px;
 }
+.lead-table .lead-assigned-bde-column {
+  width: 190px;
+  min-width: 190px;
+}
+.lead-table .lead-assigned-bde-select {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  min-height: 38px;
+  height: 38px;
+  margin: 0;
+  padding: 0 34px 0 10px;
+  line-height: 1.35;
+}
 
 @media (max-width: 620px) {
   .search-field {

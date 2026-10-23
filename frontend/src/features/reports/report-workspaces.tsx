@@ -1308,20 +1308,6 @@ export function ReportDetailWorkspace() {
           type={chartType}
         />
       )}
-      {report.apiType === "lost-leads" && rows.length > 0 && (
-        <section className="panel report-reason-summary">
-          <h2>Lost reasons</h2>
-          {[...rows.reduce((counts, row) => {
-            const reason = String(row.lostReason ?? "Not recorded");
-            counts.set(reason, (counts.get(reason) ?? 0) + 1);
-            return counts;
-          }, new Map<string, number>())].map(([reason, count]) => (
-            <p key={reason}>
-              {reason}: {count}
-            </p>
-          ))}
-        </section>
-      )}
     </main>
   );
 }

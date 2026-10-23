@@ -307,21 +307,21 @@ export default function TeamPage() {
         </div>
       </header>
 
+      <div className="follow-up-search-row">
+        <label className="search-field follow-up-search">
+          <span aria-hidden="true">⌕</span>
+          <input
+            aria-label="Search team"
+            placeholder="Search name, email, or manager"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+      </div>
       <section className="panel admin-team">
-        <div className="activity-tools admin-team-tools">
-          <label className="search-field">
-            <span aria-hidden="true">⌕</span>
-            <input
-              aria-label="Search team"
-              placeholder="Search name, email, or manager"
-              value={search}
-              onChange={(event) => {
-                setSearch(event.target.value);
-                setPage(1);
-              }}
-            />
-          </label>
-        </div>
         <div className="lead-table-wrap admin-team-table-wrap">
           <table className="lead-table admin-team-table">
             <thead>

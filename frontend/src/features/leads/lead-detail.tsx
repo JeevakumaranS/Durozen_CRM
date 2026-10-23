@@ -525,7 +525,7 @@ export function LeadDetail({
                         <div>
                           <dt>
                             {isMeetingCompletion
-                              ? "Meeting budget"
+                              ? "Budget"
                               : "Estimated budget"}
                           </dt>
                           <dd>{currency(Number(budget))}</dd>
