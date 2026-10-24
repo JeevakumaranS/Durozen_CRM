@@ -424,7 +424,7 @@ export class FollowUpsService {
   async update(id: string, dto: UpdateFollowUpDto, user: Actor) {
     assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     if (dto.scheduleMeeting) {
-      assertActorRole(user, ["ADMIN", "BDE"]);
+      assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     }
     const existing = await this.prisma.followUp.findFirst({
       where: {

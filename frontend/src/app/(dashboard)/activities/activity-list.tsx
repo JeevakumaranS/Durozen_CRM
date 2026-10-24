@@ -19,6 +19,7 @@ import {
   formatBusinessDateTime,
   formatEmbeddedDateTimes,
 } from "../../../lib/business-time";
+import { proposalActivityDescriptionForDisplay } from "../../../lib/proposal-activity";
 
 type Activity = {
   id: string;
@@ -27,6 +28,7 @@ type Activity = {
   description: string;
   outcome?: string | null;
   nextAction?: string | null;
+  followUpAt?: string | null;
   createdAt: string;
   user?: { fullName: string } | null;
   lead: {
@@ -782,12 +784,27 @@ export function ActivitiesPage({
                       }).format(new Date(activity.createdAt))}
                     </time>
                   </div>
-                  <p>{formatEmbeddedDateTimes(activity.description)}</p>
+                  <p>
+                    {formatEmbeddedDateTimes(
+                      activity.type === "PROPOSAL_SENT"
+                        ? proposalActivityDescriptionForDisplay(
+                            activity.description,
+                            activity.nextAction,
+                            activity.followUpAt,
+                          )
+                        : activity.description,
+                    )}
+                  </p>
                   {activity.outcome && (
                     <small>Outcome: {activity.outcome}</small>
                   )}
                   {activity.nextAction && (
                     <small>Next action: {activity.nextAction}</small>
+                  )}
+                  {activity.type === "PROPOSAL_SENT" && activity.followUpAt && (
+                    <small>
+                      Follow-up: {formatBusinessDateTime(activity.followUpAt)}
+                    </small>
                   )}
                   <Link href={`/leads/${activity.lead.id}`}>
                     {activity.lead.customerName}
@@ -827,7 +844,6 @@ export function ActivitiesPage({
                         : "Log call"}
                 </h2>
               </div>
-              in
               <button
                 aria-label="Close"
                 className="modal-close"

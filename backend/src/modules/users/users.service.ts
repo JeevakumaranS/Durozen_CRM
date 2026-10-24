@@ -177,6 +177,27 @@ export class UsersService {
     }
   }
 
+  async updateTeamUserPassword(id: string, password: string) {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, role: true },
+    });
+    if (!existing || existing.role === "ADMIN") {
+      throw new NotFoundException("Team account not found");
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash,
+        tokenVersion: { increment: 1 },
+        isOnline: false,
+      },
+    });
+    return { message: "Team account password updated." };
+  }
+
   async setManager(userId: string, managerId: string | null) {
     const bde = await this.prisma.user.findUnique({
       where: { id: userId },

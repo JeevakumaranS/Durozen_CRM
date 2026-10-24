@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, apiClientNullable } from "../../lib/api-client";
 import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { getAuthUser } from "../../lib/auth";
 import { notify } from "../../lib/notifications";
@@ -88,6 +88,7 @@ type Lead = {
   negotiations?: { negotiatedAmount?: string | number | null }[];
   priority: Priority;
   stage: Stage;
+  lostReason?: string | null;
   nextAction?: string | null;
   followUpAt?: string | null;
   remarks?: string | null;
@@ -177,7 +178,7 @@ function createEmptyLeadForm(): LeadForm {
     location: "",
     requirement: "",
     estimatedBudget: "",
-    leadSource: "Website",
+    leadSource: "",
     priority: "WARM",
     assignedBdeId: "",
     stage: "NEW_LEAD",
@@ -269,7 +270,10 @@ export function LeadWorkspace({
   const [canAssignLeads, setCanAssignLeads] = useState(false);
   const userRole = getAuthUser()?.role;
   const isAdmin = userRole === "ADMIN";
-  const canCreateLeads = userRole === "ADMIN" || userRole === "BDE";
+  const canCreateLeads =
+    userRole === "ADMIN" ||
+    userRole === "BDE" ||
+    userRole === "SALES_MANAGER";
   const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null);
   const [draggingLeadId, setDraggingLeadId] = useState<string | null>(null);
   const [dropTargetStage, setDropTargetStage] = useState<Stage | null>(null);
@@ -302,8 +306,9 @@ export function LeadWorkspace({
   >("");
   const [interestedMeetingType, setInterestedMeetingType] = useState("");
   const [transitionFollowUpAt, setTransitionFollowUpAt] = useState("");
-  const [transitionNextAction, setTransitionNextAction] = useState("");
   const [transitionMeetingAt, setTransitionMeetingAt] = useState("");
+  const [transitionMeetingRequirement, setTransitionMeetingRequirement] =
+    useState("");
   const [scheduledMeeting, setScheduledMeeting] =
     useState<ScheduledMeeting | null>(null);
   const [loadingScheduledMeeting, setLoadingScheduledMeeting] = useState(false);
@@ -321,12 +326,8 @@ export function LeadWorkspace({
   const [completionOtherLostReason, setCompletionOtherLostReason] =
     useState("");
   const [transitionMeetingType, setTransitionMeetingType] = useState<
-    (typeof MEETING_TYPES)[number]
-  >("Requirement Discussion");
-  const [transitionDiscussionNotes, setTransitionDiscussionNotes] =
-    useState("");
-  const [transitionCustomerConcerns, setTransitionCustomerConcerns] =
-    useState("");
+    "" | (typeof MEETING_TYPES)[number]
+  >("");
   const [transitionProposalDate, setTransitionProposalDate] = useState(
     localDateInputValue(),
   );
@@ -404,6 +405,16 @@ export function LeadWorkspace({
     window.addEventListener(LEAD_UPDATED_EVENT, refreshLeads);
     return () => window.removeEventListener(LEAD_UPDATED_EVENT, refreshLeads);
   }, []);
+
+  useEffect(() => {
+    if (view !== "pipeline") return;
+    const savedDisplay = window.sessionStorage.getItem(
+      "durozen_pipeline_display",
+    );
+    if (savedDisplay === "list" || savedDisplay === "kanban") {
+      setPipelineDisplay(savedDisplay);
+    }
+  }, [view]);
 
   async function saveLead(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -653,8 +664,11 @@ export function LeadWorkspace({
     let createdNegotiation = false;
     const requiresMeeting =
       lead.stage === "INTERESTED" && targetStage === "MEETING";
-    const requiresProposal =
+    const proposalTransition =
       lead.stage === "MEETING" && targetStage === "PROPOSAL";
+    const completingScheduledMeeting =
+      scheduledMeeting !== null && (requiresMeeting || proposalTransition);
+    const requiresProposal = proposalTransition && !completingScheduledMeeting;
     const requiresNegotiation =
       lead.stage === "PROPOSAL" && targetStage === "NEGOTIATION";
     const requiresProposalOutcome =
@@ -668,11 +682,12 @@ export function LeadWorkspace({
       pendingNegotiationOutcome !== null;
     const requiresInitialCall =
       lead.stage === "NEW_LEAD" && targetStage === "CONTACTED";
-    const completingScheduledMeeting =
-      requiresMeeting && scheduledMeeting !== null;
     const completingPendingProposal =
       requiresProposal && pendingProposalFollowUp !== null;
-    if (requiresMeeting && (loadingScheduledMeeting || scheduledMeetingCheckError)) {
+    if (
+      (requiresMeeting || proposalTransition) &&
+      (loadingScheduledMeeting || scheduledMeetingCheckError)
+    ) {
       const message =
         scheduledMeetingCheckError ||
         "Checking for an already scheduled meeting.";
@@ -781,15 +796,23 @@ export function LeadWorkspace({
       notify(message, "error");
       return;
     }
-    if (requiresMeeting && !completingScheduledMeeting && !transitionNextAction.trim()) {
-      const message = "Enter the next action before moving to Meetings.";
+    if (
+      requiresMeeting &&
+      !completingScheduledMeeting &&
+      new Date(businessDateTimeToIso(transitionMeetingAt)).getTime() <=
+        Date.now()
+    ) {
+      const message = "Choose a future meeting date and time.";
       setStageFormError(message);
       notify(message, "error");
       return;
     }
-    if (requiresMeeting && !completingScheduledMeeting && !transitionFollowUpAt) {
-      const message =
-        "Enter the next follow-up date before moving to Meetings.";
+    if (
+      requiresMeeting &&
+      !completingScheduledMeeting &&
+      !transitionMeetingType
+    ) {
+      const message = "Choose a meeting type before moving to Meetings.";
       setStageFormError(message);
       notify(message, "error");
       return;
@@ -1095,10 +1118,10 @@ export function LeadWorkspace({
             leadId: lead.id,
             meetingAt: businessDateTimeToIso(transitionMeetingAt),
             type: transitionMeetingType,
-            discussionNotes: transitionDiscussionNotes.trim() || undefined,
-            customerConcerns: transitionCustomerConcerns.trim() || undefined,
-            nextAction: transitionNextAction.trim(),
-            followUpAt: businessDateTimeToIso(transitionFollowUpAt),
+            requirement: transitionMeetingRequirement.trim() || undefined,
+            nextAction: "Attend scheduled meeting",
+            followUpAt: businessDateTimeToIso(transitionMeetingAt),
+            deferStageChange: true,
           }),
         });
       } else if (requiresProposal && completingPendingProposal) {
@@ -1250,6 +1273,9 @@ export function LeadWorkspace({
       const destinationStage =
         completedCallStage ??
         completedMeetingStage ??
+        (requiresMeeting && !completingScheduledMeeting
+          ? lead.stage
+          : undefined) ??
         (completedNegotiationFollowUp ? "NEGOTIATION" : targetStage);
       movedLeadToTopByStage.current = {
         ...movedLeadToTopByStage.current,
@@ -1282,11 +1308,8 @@ export function LeadWorkspace({
       setCompletionLostReason(LOST_REASONS[0]);
       setCompletionOtherLostReason("");
       setTransitionFollowUpAt("");
-      setTransitionNextAction("");
       setTransitionMeetingAt("");
-      setTransitionMeetingType("Requirement Discussion");
-      setTransitionDiscussionNotes("");
-      setTransitionCustomerConcerns("");
+      setTransitionMeetingType("");
       setTransitionProposalDate(localDateInputValue());
       setPendingProposalFollowUp(null);
       setLoadingPendingProposalFollowUp(false);
@@ -1309,7 +1332,9 @@ export function LeadWorkspace({
       setPendingNegotiationCheckError("");
       setNegotiatedAmount("");
       notify(
-        createdProposal
+        requiresMeeting && !completingScheduledMeeting
+          ? "Meeting scheduled. The lead will move to Meetings after the meeting is completed."
+          : createdProposal
           ? `Proposal ${lead.leadNumber} created and lead moved to Proposal.`
           : createdNegotiation
             ? "Negotiation saved and lead moved to Negotiation."
@@ -1354,7 +1379,6 @@ export function LeadWorkspace({
     setInterestedTransitionAction("");
     setInterestedMeetingType("");
     setTransitionFollowUpAt("");
-    setTransitionNextAction("");
     setTransitionMeetingAt("");
     setScheduledMeeting(null);
     setLoadingScheduledMeeting(false);
@@ -1366,9 +1390,7 @@ export function LeadWorkspace({
     setCompletionFollowUpAt("");
     setCompletionLostReason(LOST_REASONS[0]);
     setCompletionOtherLostReason("");
-    setTransitionMeetingType("Requirement Discussion");
-    setTransitionDiscussionNotes("");
-    setTransitionCustomerConcerns("");
+    setTransitionMeetingType("");
     setTransitionProposalDate(localDateInputValue());
     setPendingProposalFollowUp(null);
     setLoadingPendingProposalFollowUp(false);
@@ -1417,7 +1439,8 @@ export function LeadWorkspace({
     }
     setScheduledMeeting(null);
     setLoadingScheduledMeeting(
-      lead.stage === "INTERESTED" && targetStage === "MEETING",
+      (lead.stage === "INTERESTED" && targetStage === "MEETING") ||
+        (lead.stage === "MEETING" && targetStage === "PROPOSAL"),
     );
     setScheduledMeetingCheckError("");
     setCompletionRequirement("");
@@ -1428,11 +1451,9 @@ export function LeadWorkspace({
     setCompletionLostReason(LOST_REASONS[0]);
     setCompletionOtherLostReason("");
     setTransitionFollowUpAt(localDateTimeInputValue(lead.followUpAt));
-    setTransitionNextAction(lead.nextAction ?? "");
     setTransitionMeetingAt("");
-    setTransitionMeetingType("Requirement Discussion");
-    setTransitionDiscussionNotes("");
-    setTransitionCustomerConcerns("");
+    setTransitionMeetingRequirement(lead.requirement ?? "");
+    setTransitionMeetingType("");
     setTransitionProposalDate(localDateInputValue());
     setPendingProposalFollowUp(null);
     setLoadingPendingProposalFollowUp(
@@ -1522,6 +1543,12 @@ export function LeadWorkspace({
     stageEditLead?.stage === "INTERESTED" && stageEdit?.stage === "MEETING";
   const stageEditNeedsProposal =
     stageEditLead?.stage === "MEETING" && stageEdit?.stage === "PROPOSAL";
+  const stageEditNeedsMeetingCompletion =
+    stageEditNeedsProposal && scheduledMeeting !== null;
+  const showProposalTransitionForm =
+    stageEditNeedsProposal &&
+    !stageEditNeedsMeetingCompletion &&
+    !loadingScheduledMeeting;
   const stageEditNeedsNegotiation =
     stageEditLead?.stage === "PROPOSAL" && stageEdit?.stage === "NEGOTIATION";
   const stageEditNeedsWonFromProposal =
@@ -1551,11 +1578,15 @@ export function LeadWorkspace({
       stageEditNeedsNegotiation);
 
   useEffect(() => {
-    if (!stageEditNeedsMeeting || !stageEdit?.leadId) return;
+    if (
+      (!stageEditNeedsMeeting && !stageEditNeedsProposal) ||
+      !stageEdit?.leadId
+    )
+      return;
     let active = true;
     setLoadingScheduledMeeting(true);
     setScheduledMeetingCheckError("");
-    apiClient<ScheduledMeeting | null>(
+    apiClientNullable<ScheduledMeeting>(
       `/meetings/lead/${stageEdit.leadId}/scheduled`,
     )
       .then((meeting) => {
@@ -1586,14 +1617,14 @@ export function LeadWorkspace({
     return () => {
       active = false;
     };
-  }, [stageEditNeedsMeeting, stageEdit?.leadId]);
+  }, [stageEditNeedsMeeting, stageEditNeedsProposal, stageEdit?.leadId]);
 
   useEffect(() => {
     if (!stageEditNeedsProposal || !stageEdit?.leadId) return;
     let active = true;
     setLoadingPendingProposalFollowUp(true);
     setPendingProposalCheckError("");
-    apiClient<PendingProposalFollowUp | null>(
+    apiClientNullable<PendingProposalFollowUp>(
       `/follow-ups/lead/${stageEdit.leadId}/pending-proposal`,
     )
       .then((followUp) => {
@@ -1807,7 +1838,13 @@ export function LeadWorkspace({
                 aria-pressed={pipelineDisplay === display}
                 className={pipelineDisplay === display ? "selected" : ""}
                 key={display}
-                onClick={() => setPipelineDisplay(display)}
+                onClick={() => {
+                  setPipelineDisplay(display);
+                  window.sessionStorage.setItem(
+                    "durozen_pipeline_display",
+                    display,
+                  );
+                }}
                 title={`${display === "kanban" ? "Kanban" : "List"} view`}
                 type="button"
               >
@@ -1968,6 +2005,12 @@ export function LeadWorkspace({
                       <p className="lead-card-action">
                         {lead.nextAction || "Next action not set"}
                       </p>
+                      {lead.stage === "LOST" && (
+                        <div className="lead-card-lost-reason">
+                          <strong>Lost reason</strong>
+                          <span>{lead.lostReason || "Not recorded"}</span>
+                        </div>
+                      )}
                       <label className="stage-select-label">
                         Move stage
                         <select
@@ -2078,6 +2121,10 @@ export function LeadWorkspace({
                   <th>Customer</th>
                   <th>Company Name</th>
                   <th>Stage</th>
+                  {view === "pipeline" &&
+                    visibleLeads.some((lead) => lead.stage === "LOST") && (
+                      <th>Lost reason</th>
+                    )}
                   {view === "pipeline" && <th>Move stage</th>}
                   <th>Priority</th>
                   <th className="lead-assigned-bde-column">Assigned BDE</th>
@@ -2100,6 +2147,14 @@ export function LeadWorkspace({
                         {stageName(lead.stage)}
                       </span>
                     </td>
+                    {view === "pipeline" &&
+                      visibleLeads.some((row) => row.stage === "LOST") && (
+                        <td>
+                          {lead.stage === "LOST"
+                            ? lead.lostReason || "Not recorded"
+                            : "—"}
+                        </td>
+                      )}
                     {view === "pipeline" && (
                       <td className="pipeline-stage-actions">
                         <label className="stage-select-label">
@@ -2279,6 +2334,10 @@ export function LeadWorkspace({
                         : scheduledMeeting
                           ? `Complete meeting with ${stageEditLead.customerName}`
                           : `Schedule a meeting with ${stageEditLead.customerName}`
+                      : stageEditNeedsMeetingCompletion
+                        ? `Complete meeting with ${stageEditLead.customerName}`
+                      : stageEditNeedsProposal && loadingScheduledMeeting
+                        ? `Checking meeting for ${stageEditLead.customerName}`
                       : stageEditNeedsProposal
                         ? `Prepare proposal for ${stageEditLead.customerName}`
                         : stageEditNeedsNegotiationCompletion
@@ -2436,12 +2495,14 @@ export function LeadWorkspace({
                   )}
                 </>
               )}
-              {stageEditNeedsMeeting && loadingScheduledMeeting && (
+              {(stageEditNeedsMeeting || stageEditNeedsProposal) &&
+                loadingScheduledMeeting && (
                 <div className="workspace-notice form-wide" role="status">
                   Checking whether a meeting is already scheduled...
                 </div>
               )}
-              {stageEditNeedsMeeting && scheduledMeeting && (
+              {(stageEditNeedsMeeting && scheduledMeeting) ||
+              stageEditNeedsMeetingCompletion ? (
                 <section className="lead-form-section form-wide">
                   <div>
                     <h3>Complete scheduled meeting</h3>
@@ -2466,34 +2527,36 @@ export function LeadWorkspace({
                     />
                   </div>
                 </section>
-              )}
+              ) : null}
               {stageEditNeedsMeeting && !loadingScheduledMeeting && !scheduledMeeting && !scheduledMeetingCheckError && (
                 <>
                   <section className="lead-form-section form-wide">
                     <div>
                       <h3>Meeting details</h3>
-                      <p>Plan the meeting and capture discussion context</p>
+                      <p>Schedule the meeting to move this lead to Meetings</p>
                     </div>
                     <div className="lead-form-fields">
                       <ClockDateTimePicker
                         className="form-wide"
-                        label="Meeting"
+                        label="Meeting date and time"
                         required
+                        minValue={`${localDateInputValue()}T00:00`}
                         value={transitionMeetingAt}
                         onChange={setTransitionMeetingAt}
                       />
-                      <label>
-                        Meeting Type *
+                      <label className="form-wide">
+                        Meeting type *
                         <select
                           required
                           value={transitionMeetingType}
-                          onChange={(event) =>
+                          onChange={(event) => {
+                            const value = event.target.value;
                             setTransitionMeetingType(
-                              event.target
-                                .value as (typeof MEETING_TYPES)[number],
-                            )
-                          }
+                              MEETING_TYPES.find((type) => type === value) ?? "",
+                            );
+                          }}
                         >
+                          <option value="">Choose a meeting type</option>
                           {MEETING_TYPES.map((meetingType) => (
                             <option key={meetingType} value={meetingType}>
                               {meetingType}
@@ -2502,60 +2565,26 @@ export function LeadWorkspace({
                         </select>
                       </label>
                       <label className="form-wide">
-                        Discussion Notes
+                        Purpose / agenda
                         <textarea
                           rows={2}
-                          value={transitionDiscussionNotes}
+                          value={transitionMeetingRequirement}
                           onChange={(event) =>
-                            setTransitionDiscussionNotes(event.target.value)
+                            setTransitionMeetingRequirement(event.target.value)
                           }
                         />
                       </label>
-                      <label className="form-wide">
-                        Customer Concerns
-                        <textarea
-                          rows={2}
-                          value={transitionCustomerConcerns}
-                          onChange={(event) =>
-                            setTransitionCustomerConcerns(event.target.value)
-                          }
-                        />
-                      </label>
-                    </div>
-                  </section>
-                  <section className="lead-form-section form-wide">
-                    <div>
-                      <h3>Follow-up plan</h3>
-                      <p>Set the next step and when it should happen</p>
-                    </div>
-                    <div className="lead-form-fields">
-                      <label>
-                        Next Action *
-                        <input
-                          required
-                          value={transitionNextAction}
-                          onChange={(event) =>
-                            setTransitionNextAction(event.target.value)
-                          }
-                        />
-                      </label>
-                      <ClockDateTimePicker
-                        className="form-wide"
-                        label="Next follow-up"
-                        required
-                        value={transitionFollowUpAt}
-                        onChange={setTransitionFollowUpAt}
-                      />
                     </div>
                   </section>
                 </>
               )}
-              {stageEditNeedsProposal && loadingPendingProposalFollowUp && (
+              {showProposalTransitionForm &&
+                loadingPendingProposalFollowUp && (
                 <div className="workspace-notice form-wide" role="status">
                   Checking for a pending proposal follow-up...
                 </div>
               )}
-              {stageEditNeedsProposal && pendingProposalFollowUp && (
+              {showProposalTransitionForm && pendingProposalFollowUp && (
                 <section className="lead-form-section form-wide">
                   <div>
                     <h3>Complete pending proposal follow-up</h3>
@@ -2579,7 +2608,7 @@ export function LeadWorkspace({
                   </div>
                 </section>
               )}
-              {stageEditNeedsProposal &&
+              {showProposalTransitionForm &&
                 !loadingPendingProposalFollowUp &&
                 !pendingProposalFollowUp &&
                 !pendingProposalCheckError && (
@@ -2970,7 +2999,9 @@ export function LeadWorkspace({
                     : stageEditNeedsMeeting
                       ? scheduledMeeting
                         ? "Complete the scheduled meeting with its next action."
-                        : "Schedule a meeting and set the next action and follow-up."
+                        : "Schedule a meeting to move this lead to Meetings."
+                      : stageEditNeedsMeetingCompletion
+                        ? "Complete the scheduled meeting; the lead will remain in Meetings for its proposal follow-up."
                       : stageEditNeedsProposal
                         ? pendingProposalFollowUp
                           ? "Complete the pending proposal follow-up to move this lead to Proposal."
@@ -3001,10 +3032,10 @@ export function LeadWorkspace({
                     type="submit"
                     disabled={
                       busy ||
-                      (stageEditNeedsMeeting &&
+                      ((stageEditNeedsMeeting || stageEditNeedsProposal) &&
                         (loadingScheduledMeeting ||
                           Boolean(scheduledMeetingCheckError))) ||
-                      (stageEditNeedsProposal &&
+                      (showProposalTransitionForm &&
                         (loadingPendingProposalFollowUp ||
                           Boolean(pendingProposalCheckError))) ||
                       (stageEditNeedsProposalOutcome &&
@@ -3035,6 +3066,8 @@ export function LeadWorkspace({
                           ? scheduledMeeting
                             ? "Complete meeting"
                             : "Schedule meeting and move to Meetings"
+                          : stageEditNeedsMeetingCompletion
+                            ? "Complete meeting"
                           : stageEditNeedsProposal
                             ? pendingProposalFollowUp
                               ? "Complete proposal and move to Proposal"
@@ -3242,6 +3275,7 @@ export function LeadWorkspace({
                         setForm({ ...form, leadSource: event.target.value })
                       }
                     >
+                      <option value="">Select lead source</option>
                       {SOURCES.map((source) => (
                         <option key={source}>{source}</option>
                       ))}

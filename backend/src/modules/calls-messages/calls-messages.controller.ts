@@ -20,7 +20,7 @@ import { RescheduleCallMessageDto } from "./dto/reschedule-call-message.dto";
 
 @Controller("calls-messages")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMIN", "BDE")
+@Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class CallsMessagesController {
   constructor(private readonly callsMessages: CallsMessagesService) {}
 
@@ -43,7 +43,7 @@ export class CallsMessagesController {
   }
 
   @Post("complete-lead")
-  @Roles("ADMIN", "BDE")
+  @Roles("ADMIN", "BDE", "SALES_MANAGER")
   completeLead(
     @Body() dto: CompleteLeadCallDto,
     @CurrentUser() user: { sub: string; role: string },

@@ -257,7 +257,7 @@ export class LeadsService {
     dto: CreateActivityDto,
     user: Actor,
   ) {
-    assertActorRole(user, ["ADMIN", "BDE"]);
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const lead = await this.prisma.lead.findFirst({
       where: {
         id,
@@ -355,7 +355,7 @@ export class LeadsService {
   }
 
   async create(dto: CreateLeadDto, user: Actor) {
-    assertActorRole(user, ["ADMIN", "BDE"]);
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const assignedBdeId =
       user.role === "BDE" ? user.sub : dto.assignedBdeId;
     const stage = (dto.stage ?? LeadStage.NEW_LEAD) as PrismaLeadStage;

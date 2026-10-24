@@ -60,8 +60,12 @@ export class DashboardService {
 
     const [
       grouped,
-      todaysFollowUps,
-      overdueFollowUps,
+      todaysFollowUpTasks,
+      overdueFollowUpTasks,
+      todaysCallsAndMessages,
+      overdueCallsAndMessages,
+      todaysScheduledMeetings,
+      overdueScheduledMeetings,
       todaysMeetings,
       todayRevenue,
       weekRevenue,
@@ -77,6 +81,7 @@ export class DashboardService {
       this.prisma.followUp.count({
         where: {
           status: "PENDING",
+          type: { not: "Meeting" },
           dueAt: { gte: todayStart, lt: tomorrow },
           lead: scope,
         },
@@ -84,7 +89,36 @@ export class DashboardService {
       this.prisma.followUp.count({
         where: {
           status: "PENDING",
+          type: { not: "Meeting" },
           dueAt: { lt: todayStart },
+          lead: scope,
+        },
+      }),
+      this.prisma.callMessage.count({
+        where: {
+          status: "PENDING",
+          dueAt: { gte: todayStart, lt: tomorrow },
+          lead: scope,
+        },
+      }),
+      this.prisma.callMessage.count({
+        where: {
+          status: "PENDING",
+          dueAt: { lt: todayStart },
+          lead: scope,
+        },
+      }),
+      this.prisma.meeting.count({
+        where: {
+          status: MeetingStatus.SCHEDULED,
+          meetingAt: { gte: todayStart, lt: tomorrow },
+          lead: scope,
+        },
+      }),
+      this.prisma.meeting.count({
+        where: {
+          status: MeetingStatus.SCHEDULED,
+          meetingAt: { lt: todayStart },
           lead: scope,
         },
       }),
@@ -119,8 +153,14 @@ export class DashboardService {
         negotiations: count(LeadStage.NEGOTIATION),
         wonDeals: count(LeadStage.WON),
         lostDeals: count(LeadStage.LOST),
-        todaysFollowUps,
-        overdueFollowUps,
+        todaysFollowUps:
+          todaysFollowUpTasks +
+          todaysCallsAndMessages +
+          todaysScheduledMeetings,
+        overdueFollowUps:
+          overdueFollowUpTasks +
+          overdueCallsAndMessages +
+          overdueScheduledMeetings,
       },
       revenue: {
         today: String(todayRevenue),

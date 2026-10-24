@@ -231,6 +231,8 @@ export default function DashboardLayout({
                 const activityLinks =
                   user.role === "SALES_MANAGER"
                     ? [
+                        ["Calls & Msg", "/activities/calls"],
+                        ["Meetings", "/activities/meetings"],
                         ["Proposals", "/activities/proposals"],
                         ["Negotiations", "/activities/negotiations"],
                       ]

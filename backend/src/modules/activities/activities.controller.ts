@@ -7,7 +7,7 @@ import { ActivitiesService } from "./activities.service";
 
 @Controller("activities")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMIN", "BDE")
+@Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class ActivitiesController {
   constructor(private readonly activities: ActivitiesService) {}
   @Get() list(

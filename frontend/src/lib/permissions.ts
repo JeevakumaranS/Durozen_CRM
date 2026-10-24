@@ -22,7 +22,10 @@ const bdeRoutes = [
 const managerRoutes = [
   "/dashboard",
   "/leads",
+  "/leads/new",
   "/pipeline",
+  "/activities",
+  "/meetings",
   "/activities/proposals",
   "/activities/negotiations",
   "/proposals",
@@ -38,9 +41,6 @@ function matchesRoute(pathname: string, route: string): boolean {
 
 export function canAccessRoute(userRole: UserRole, pathname: string): boolean {
   if (userRole === "ADMIN") return true;
-  if (userRole === "SALES_MANAGER" && matchesRoute(pathname, "/leads/new")) {
-    return false;
-  }
   const allowedRoutes = userRole === "BDE" ? bdeRoutes : managerRoutes;
   return allowedRoutes.some((route) => matchesRoute(pathname, route));
 }

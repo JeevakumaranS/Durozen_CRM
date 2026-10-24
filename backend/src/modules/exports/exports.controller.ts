@@ -15,6 +15,7 @@ import { ReportsService } from "../reports/reports.service";
 import { LeadsService } from "../leads/leads.service";
 import { ExcelExportService } from "./excel.service";
 import { PdfExportService } from "./pdf.service";
+import { proposalActivityDescriptionForDisplay } from "../proposals/proposal-activity";
 
 @Controller("exports")
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -155,7 +156,17 @@ export class ExportsController {
         details: [
           { label: "Contact date", value: formatDate(activity.contactDate) },
           { label: "Contact type", value: activity.contactType ?? "" },
-          { label: "Description", value: activity.description },
+          {
+            label: "Description",
+            value:
+              activity.type === "PROPOSAL_SENT"
+                ? proposalActivityDescriptionForDisplay(
+                    activity.description,
+                    Boolean(activity.nextAction),
+                    Boolean(activity.followUpAt),
+                  )
+                : activity.description,
+          },
           { label: "Outcome", value: activity.outcome ?? "" },
           { label: "Customer response", value: activity.customerResponse ?? "" },
           { label: "Expected timeline", value: activity.expectedTimeline ?? "" },

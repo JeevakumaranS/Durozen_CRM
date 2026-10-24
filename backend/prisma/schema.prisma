@@ -48,6 +48,7 @@ model User {
   fullName     String        @map("full_name")
   email        String        @unique
   passwordHash String        @map("password_hash")
+  tokenVersion Int           @default(0) @map("token_version")
   role         UserRole      @default(BDE)
   isActive     Boolean       @default(true) @map("is_active")
   isOnline     Boolean       @default(false) @map("is_online")

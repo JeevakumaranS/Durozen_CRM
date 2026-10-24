@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { Actor, assertActorRole } from "../../common/authorization/actor-role";
+import { leadScope } from "../../common/authorization/lead-scope";
 import { PrismaService } from "../../prisma/prisma.service";
 
 @Injectable()
@@ -17,7 +18,7 @@ export class ActivitiesService {
     pageSize: number,
     user: Actor,
   ) {
-    assertActorRole(user, ["ADMIN", "BDE"]);
+    assertActorRole(user, ["ADMIN", "BDE", "SALES_MANAGER"]);
     const start = from ? new Date(from) : undefined;
     const end = to ? new Date(to) : undefined;
     const conditions: Prisma.ActivityWhereInput[] = [];
@@ -64,7 +65,7 @@ export class ActivitiesService {
             },
           }
         : {}),
-      ...(user.role === "BDE" ? { lead: { assignedBdeId: user.sub } } : {}),
+      ...(user.role !== "ADMIN" ? { lead: leadScope(user) } : {}),
     };
     return this.prisma.$transaction([
       this.prisma.activity.findMany({

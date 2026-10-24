@@ -7,6 +7,7 @@ import { apiClient, apiClientResponse } from "../../lib/api-client";
 import { LEAD_UPDATED_EVENT } from "../../lib/lead-events";
 import { notify } from "../../lib/notifications";
 import { formatBusinessDateTime, formatEmbeddedDateTimes } from "../../lib/business-time";
+import { proposalActivityDescriptionForDisplay } from "../../lib/proposal-activity";
 
 type Activity = {
   id: string;
@@ -58,6 +59,7 @@ type LeadDetails = {
   leadSource: string;
   priority: string;
   stage: string;
+  lostReason?: string | null;
   nextAction?: string | null;
   followUpAt?: string | null;
   remarks?: string | null;
@@ -94,8 +96,16 @@ const leadDate = (value: string) =>
   new Intl.DateTimeFormat("en-IN", {
     dateStyle: "medium",
   }).format(new Date(`${value.slice(0, 10)}T00:00:00`));
-const proposalActivityDetails = (description: string) =>
-  description
+const proposalActivityDetails = (
+  description: string,
+  activity: Activity,
+) => {
+  const seenLabels = new Set<string>();
+  return proposalActivityDescriptionForDisplay(
+    description,
+    activity.nextAction,
+    activity.followUpAt,
+  )
     .split(/\r?\n/)
     .map((line, index) => {
       const separator = line.indexOf(": ");
@@ -108,9 +118,20 @@ const proposalActivityDetails = (description: string) =>
             value: line.slice(separator + 2),
           };
     })
-    .filter((detail): detail is { label: string; value: string } =>
-      Boolean(detail?.value),
-    );
+    .filter((detail): detail is { label: string; value: string } => {
+      if (!detail?.value) return false;
+      const normalizedLabel = detail.label.toLowerCase();
+      if (
+        (normalizedLabel === "next action" && activity.nextAction) ||
+        (normalizedLabel === "follow-up" && activity.followUpAt) ||
+        seenLabels.has(normalizedLabel)
+      ) {
+        return false;
+      }
+      seenLabels.add(normalizedLabel);
+      return true;
+    });
+};
 const proposalDetailsFromRecord = (
   proposal: NonNullable<LeadDetails["proposals"]>[number],
 ) => [
@@ -380,6 +401,18 @@ export function LeadDetail({
             </div>
           </div>
           <div className="activity-timeline">
+            {lead.stage === "LOST" && (
+              <article className="timeline-item lost-outcome-item">
+                <span className="timeline-marker lost-outcome-marker" />
+                <div className="timeline-entry lost-outcome-entry">
+                  <strong className="lost-outcome-title">Lead marked Lost</strong>
+                  <div className="lost-outcome-reason">
+                    <span>Lost reason</span>
+                    <strong>{lead.lostReason || "Not recorded"}</strong>
+                  </div>
+                </div>
+              </article>
+            )}
             {timelineActivities.map((activity) => {
               const isMeetingCompletion = activity.type === "MEETING_COMPLETED";
               const isProposalSent = activity.type === "PROPOSAL_SENT";
@@ -401,7 +434,7 @@ export function LeadDetail({
                     )[0]
                 : undefined;
               const proposalDetails = isProposalSent
-                ? proposalActivityDetails(activity.description)
+                ? proposalActivityDetails(activity.description, activity)
                 : [];
               const hasProposalInputs =
                 proposalDetails.some(
@@ -409,7 +442,10 @@ export function LeadDetail({
                 );
               const displayedProposalDetails =
                 proposalRecord && !hasProposalInputs
-                  ? proposalDetailsFromRecord(proposalRecord)
+                  ? proposalDetailsFromRecord(proposalRecord).filter(
+                      ({ label }) =>
+                        label !== "Follow-up" || !activity.followUpAt,
+                    )
                   : proposalDetails;
               const contactDate =
                 activity.contactDate ??

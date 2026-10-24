@@ -77,6 +77,15 @@ export async function apiClient<T>(path: string, init: RequestInit = {}) {
   return response.json() as Promise<T>;
 }
 
+export async function apiClientNullable<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T | null> {
+  const response = await apiClientResponse(path, init);
+  const body = await response.text();
+  return body ? (JSON.parse(body) as T) : null;
+}
+
 export async function logoutAndRedirect(): Promise<void> {
   let logoutFailed = false;
   try {

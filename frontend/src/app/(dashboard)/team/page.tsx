@@ -30,10 +30,73 @@ type TeamPageData = {
 type AdminUser = {
   role: "ADMIN";
 };
-type CreateRole = "BDE" | "SALES_MANAGER";
+type CreateRole = "" | "BDE" | "SALES_MANAGER";
 const PAGE_SIZE = 10;
 const ONLINE_WINDOW_MS = 2 * 60_000;
 const EXACT_TIME_AFTER_MS = 20 * 60 * 60_000;
+
+function PasswordVisibilityToggle({
+  visible,
+  onToggle,
+  label,
+}: {
+  visible: boolean;
+  onToggle: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      aria-label={`${visible ? "Hide" : "Show"} ${label}`}
+      className="password-visibility-toggle"
+      onClick={onToggle}
+      type="button"
+    >
+      <svg
+        aria-hidden="true"
+        fill="none"
+        height="18"
+        viewBox="0 0 24 24"
+        width="18"
+      >
+        {visible ? (
+          <>
+            <path
+              d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+            />
+            <circle
+              cx="12"
+              cy="12"
+              r="3"
+              stroke="currentColor"
+              strokeWidth="2"
+            />
+          </>
+        ) : (
+          <>
+            <path
+              d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+            />
+            <path
+              d="M9.9 5.2A10 10 0 0 1 12 5c6.4 0 10 7 10 7a15 15 0 0 1-3.1 3.8M6.2 6.2C3.5 8 2 12 2 12s3.6 7 10 7c1.1 0 2.1-.2 3-.5"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+            />
+          </>
+        )}
+      </svg>
+    </button>
+  );
+}
 
 function formatPresence(
   lastActiveAt: string | null,
@@ -73,13 +136,17 @@ export default function TeamPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<CreateRole>("BDE");
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [role, setRole] = useState<CreateRole>("");
   const [managerId, setManagerId] = useState("");
   const [creating, setCreating] = useState(false);
   const [editingUser, setEditingUser] = useState<TeamUser | null>(null);
   const [editFullName, setEditFullName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [editPassword, setEditPassword] = useState("");
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const load = useCallback(async () => {
@@ -190,6 +257,10 @@ export default function TeamPage() {
 
   async function createUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!role) {
+      notify("Choose a role for the team account.", "error");
+      return;
+    }
     setCreating(true);
     try {
       await apiClient<TeamUser>("/users", {
@@ -205,7 +276,8 @@ export default function TeamPage() {
       setFullName("");
       setEmail("");
       setPassword("");
-      setRole("BDE");
+      setShowCreatePassword(false);
+      setRole("");
       setManagerId("");
       setShowCreateForm(false);
       setPage(1);
@@ -221,10 +293,24 @@ export default function TeamPage() {
     }
   }
 
+  function closeCreateForm() {
+    setShowCreateForm(false);
+    setPassword("");
+    setShowCreatePassword(false);
+  }
+
   function openEdit(user: TeamUser) {
     setEditingUser(user);
     setEditFullName(user.fullName);
     setEditEmail(user.email);
+    setEditPassword("");
+    setShowEditPassword(false);
+  }
+
+  function closeEditForm() {
+    setEditingUser(null);
+    setEditPassword("");
+    setShowEditPassword(false);
   }
 
   async function updateUser(event: FormEvent<HTMLFormElement>) {
@@ -239,7 +325,7 @@ export default function TeamPage() {
           email: editEmail.trim(),
         }),
       });
-      setEditingUser(null);
+      closeEditForm();
       await refresh();
       notify("Team account details updated.");
     } catch (reason) {
@@ -251,6 +337,29 @@ export default function TeamPage() {
       );
     } finally {
       setSavingEdit(false);
+    }
+  }
+
+  async function updatePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingUser) return;
+    setSavingPassword(true);
+    try {
+      await apiClient(`/users/${editingUser.id}/password`, {
+        method: "PATCH",
+        body: JSON.stringify({ password: editPassword }),
+      });
+      closeEditForm();
+      notify("Team account password updated successfully.");
+    } catch (reason) {
+      notify(
+        reason instanceof Error
+          ? reason.message
+          : "Unable to update team account password.",
+        "error",
+      );
+    } finally {
+      setSavingPassword(false);
     }
   }
 
@@ -297,7 +406,12 @@ export default function TeamPage() {
         <div className="workspace-actions">
           <button
             className="primary"
-            onClick={() => setShowCreateForm(true)}
+            onClick={() => {
+              setRole("");
+              setPassword("");
+              setShowCreatePassword(false);
+              setShowCreateForm(true);
+            }}
           >
             + Create team account
           </button>
@@ -459,7 +573,7 @@ export default function TeamPage() {
           className="modal-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setShowCreateForm(false);
+            if (event.target === event.currentTarget) closeCreateForm();
           }}
         >
           <section
@@ -476,7 +590,7 @@ export default function TeamPage() {
               <button
                 className="modal-close"
                 aria-label="Close"
-                onClick={() => setShowCreateForm(false)}
+                onClick={closeCreateForm}
               >
                 ×
               </button>
@@ -499,24 +613,43 @@ export default function TeamPage() {
                   onChange={(event) => setEmail(event.target.value)}
                 />
               </label>
-              <label className="form-wide">
-                Temporary password *
-                <input
-                  required
-                  type="password"
-                  minLength={10}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
+              <label className="form-wide password-field-label">
+                <span>Temporary password *</span>
+                <div className="password-input-wrap">
+                  <input
+                    required
+                    type={showCreatePassword ? "text" : "password"}
+                    minLength={10}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                  <PasswordVisibilityToggle
+                    visible={showCreatePassword}
+                    onToggle={() =>
+                      setShowCreatePassword((visible) => !visible)
+                    }
+                    label="temporary password"
+                  />
+                </div>
               </label>
               <label className="form-wide">
-                Role
+                Role *
                 <select
+                  required
                   value={role}
-                  onChange={(event) =>
-                    setRole(event.target.value as CreateRole)
-                  }
+                  onChange={(event) => {
+                    const selectedRole = event.target.value;
+                    setRole(
+                      selectedRole === "BDE" ||
+                        selectedRole === "SALES_MANAGER"
+                        ? selectedRole
+                        : "",
+                    );
+                  }}
                 >
+                  <option value="" disabled>
+                    Choose a role
+                  </option>
                   <option value="BDE">BDE / Sales Executive</option>
                   <option value="SALES_MANAGER">Sales Manager</option>
                 </select>
@@ -538,8 +671,11 @@ export default function TeamPage() {
                 </label>
               )}
               <div className="form-footer">
-                <p>Share the temporary password securely with the new user.</p>
-                <button className="primary" disabled={creating}>
+                <p>
+                  Use at least 10 characters and share the temporary password
+                  securely.
+                </p>
+                <button className="primary" disabled={creating || !role}>
                   {creating ? "Creating..." : "Create account"}
                 </button>
               </div>
@@ -552,7 +688,7 @@ export default function TeamPage() {
           className="modal-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setEditingUser(null);
+            if (event.target === event.currentTarget) closeEditForm();
           }}
         >
           <section
@@ -569,7 +705,7 @@ export default function TeamPage() {
               <button
                 className="modal-close"
                 aria-label="Close"
-                onClick={() => setEditingUser(null)}
+                onClick={closeEditForm}
               >
                 ×
               </button>
@@ -600,9 +736,42 @@ export default function TeamPage() {
                 />
               </label>
               <div className="form-footer">
-                <p>Changing the email address will sign out the current account.</p>
+                <p>Changing the email address or password will sign out the current account.</p>
                 <button className="primary" disabled={savingEdit}>
                   {savingEdit ? "Saving..." : "Save changes"}
+                </button>
+              </div>
+            </form>
+            <form
+              className="lead-form team-password-form"
+              onSubmit={updatePassword}
+            >
+              <label className="form-wide password-field-label">
+                <span>Set a new password *</span>
+                <div className="password-input-wrap">
+                  <input
+                    required
+                    type={showEditPassword ? "text" : "password"}
+                    minLength={10}
+                    value={editPassword}
+                    onChange={(event) => setEditPassword(event.target.value)}
+                  />
+                  <PasswordVisibilityToggle
+                    visible={showEditPassword}
+                    onToggle={() =>
+                      setShowEditPassword((visible) => !visible)
+                    }
+                    label="new password"
+                  />
+                </div>
+              </label>
+              <div className="form-footer">
+                <p>Use at least 10 characters. Share the new password securely.</p>
+                <button
+                  className="primary"
+                  disabled={savingPassword || editPassword.length < 10}
+                >
+                  {savingPassword ? "Updating..." : "Update password"}
                 </button>
               </div>
             </form>

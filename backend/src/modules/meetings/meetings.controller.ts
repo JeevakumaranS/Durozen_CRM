@@ -21,7 +21,7 @@ import { MeetingsService } from "./meetings.service";
 
 @Controller("meetings")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMIN", "BDE")
+@Roles("ADMIN", "BDE", "SALES_MANAGER")
 export class MeetingsController {
   constructor(private readonly meetings: MeetingsService) {}
   @Get() list(

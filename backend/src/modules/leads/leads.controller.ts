@@ -43,7 +43,7 @@ export class LeadsController {
     return this.leads.get(id, user);
   }
   @Post()
-  @Roles("ADMIN", "BDE")
+  @Roles("ADMIN", "BDE", "SALES_MANAGER")
   create(
     @Body() dto: CreateLeadDto,
     @CurrentUser() user: { sub: string; role: string },
@@ -51,7 +51,7 @@ export class LeadsController {
     return this.leads.create(dto, user);
   }
   @Post(":id/activities")
-  @Roles("ADMIN", "BDE")
+  @Roles("ADMIN", "BDE", "SALES_MANAGER")
   addActivity(
     @Param("id") id: string,
     @Body() dto: CreateActivityDto,

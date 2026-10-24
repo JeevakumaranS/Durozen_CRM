@@ -16,6 +16,7 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserStatusDto } from "./dto/update-user-status.dto";
 import { UpdateUserManagerDto } from "./dto/update-user-manager.dto";
 import { UpdateTeamUserDto } from "./dto/update-team-user.dto";
+import { UpdateTeamUserPasswordDto } from "./dto/update-team-user-password.dto";
 import { UsersService } from "./users.service";
 
 @Controller("users")
@@ -67,6 +68,14 @@ export class UsersController {
   @Patch(":id")
   update(@Param("id") id: string, @Body() dto: UpdateTeamUserDto) {
     return this.users.updateTeamUser(id, dto);
+  }
+
+  @Patch(":id/password")
+  updatePassword(
+    @Param("id") id: string,
+    @Body() dto: UpdateTeamUserPasswordDto,
+  ) {
+    return this.users.updateTeamUserPassword(id, dto.password);
   }
 
   @Delete(":id")

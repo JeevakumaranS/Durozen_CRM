@@ -48,7 +48,10 @@ const money = (value: string) =>
 
 export default function Dashboard() {
   const user = getAuthUser();
-  const canCreateLeads = user?.role === "ADMIN" || user?.role === "BDE";
+  const canCreateLeads =
+    user?.role === "ADMIN" ||
+    user?.role === "BDE" ||
+    user?.role === "SALES_MANAGER";
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [error, setError] = useState("");
 

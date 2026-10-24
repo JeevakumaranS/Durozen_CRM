@@ -37,7 +37,9 @@ export class JwtAuthGuard implements CanActivate {
 
     if (
       typeof claims === "string" ||
-      typeof claims.sub !== "string"
+      typeof claims.sub !== "string" ||
+      (claims.tokenVersion !== undefined &&
+        (!Number.isInteger(claims.tokenVersion) || claims.tokenVersion < 0))
     ) {
       throw new UnauthorizedException();
     }
@@ -49,9 +51,14 @@ export class JwtAuthGuard implements CanActivate {
         fullName: true,
         email: true,
         isActive: true,
+        tokenVersion: true,
       },
     });
-    if (!user?.isActive) {
+    if (
+      !user?.isActive ||
+      (typeof claims.tokenVersion === "number" ? claims.tokenVersion : 0) !==
+        user.tokenVersion
+    ) {
       throw new UnauthorizedException();
     }
 

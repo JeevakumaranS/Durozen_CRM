@@ -25,6 +25,7 @@ export class AuthService {
         sub: user.id,
         role: user.role,
         name: user.fullName,
+        tokenVersion: user.tokenVersion,
       },
       getJwtSecret(),
       { expiresIn: `${getJwtExpirationMinutes()}m` },
@@ -86,7 +87,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(newPassword, 12);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash },
+      data: { passwordHash, tokenVersion: { increment: 1 } },
     });
     return { message: "Password updated" };
   }

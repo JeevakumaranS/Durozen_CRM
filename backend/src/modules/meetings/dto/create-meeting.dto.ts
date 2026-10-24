@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsBoolean,
   IsIn,
   IsNumber,
   IsNotEmpty,
@@ -26,4 +27,5 @@ export class CreateMeetingDto {
   @IsOptional() @IsString() customerConcerns?: string;
   @IsString() @IsNotEmpty() nextAction!: string;
   @IsDateString() followUpAt!: string;
+  @IsOptional() @IsBoolean() deferStageChange?: boolean;
 }
