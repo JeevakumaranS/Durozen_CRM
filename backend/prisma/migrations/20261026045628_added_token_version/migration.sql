@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "leads" ALTER COLUMN "lead_date" SET DEFAULT CURRENT_TIMESTAMP;

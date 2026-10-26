@@ -5,6 +5,7 @@ import type { NextConfig } from 'next';
 const nextConfig = (phase: string): NextConfig => ({
   distDir:
     phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next-production',
+  output: 'standalone',
   outputFileTracingRoot: path.join(__dirname),
 });
 
