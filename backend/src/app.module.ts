@@ -12,15 +12,10 @@ import { CallsMessagesModule } from "./modules/calls-messages/calls-messages.mod
 import { MeetingsModule } from "./modules/meetings/meetings.module";
 import { ProposalsModule } from "./modules/proposals/proposals.module";
 import { NegotiationsModule } from "./modules/negotiations/negotiations.module";
-import { DealsModule } from "./modules/deals/deals.module";
 import { CustomersModule } from "./modules/customers/customers.module";
 import { PerformanceModule } from "./modules/performance/performance.module";
 import { ReportsModule } from "./modules/reports/reports.module";
 import { ExportsModule } from "./modules/exports/exports.module";
-import { SettingsModule } from "./modules/settings/settings.module";
-import { NotificationsModule } from "./modules/notifications/notifications.module";
-import { JobsModule } from "./modules/jobs/jobs.module";
-import { AuditModule } from "./modules/audit/audit.module";
 import { AdminModule } from "./modules/admin/admin.module";
 import { validateEnvironment } from "./config/env.validation";
 import { GuardsModule } from "./common/guards/guards.module";
@@ -44,15 +39,10 @@ import { GuardsModule } from "./common/guards/guards.module";
     MeetingsModule,
     ProposalsModule,
     NegotiationsModule,
-    DealsModule,
     CustomersModule,
     PerformanceModule,
     ReportsModule,
     ExportsModule,
-    SettingsModule,
-    NotificationsModule,
-    JobsModule,
-    AuditModule,
     AdminModule,
   ],
 })

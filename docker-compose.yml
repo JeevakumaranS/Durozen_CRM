@@ -23,7 +23,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       target: runtime
-    restart: unless-stopped
+    restart: always
     environment:
       NODE_ENV: production
       PORT: 4000
