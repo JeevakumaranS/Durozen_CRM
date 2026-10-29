@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -24,4 +25,8 @@ export class CreateUserDto {
   @IsOptional()
   @IsUUID()
   managerId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  canViewCustomers?: boolean;
 }

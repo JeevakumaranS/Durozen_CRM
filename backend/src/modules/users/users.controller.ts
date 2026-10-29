@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
+import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { Roles } from "../../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../../common/guards/roles.guard";
@@ -28,6 +29,12 @@ export class UsersController {
   @Get("managers")
   managers() {
     return this.users.listActiveManagers();
+  }
+
+  @Get("my-team")
+  @Roles("SALES_MANAGER")
+  myTeam(@CurrentUser() user: { sub: string }) {
+    return this.users.listManagedBdes(user.sub);
   }
 
   @Get()

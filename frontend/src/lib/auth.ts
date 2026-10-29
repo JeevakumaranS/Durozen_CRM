@@ -6,6 +6,7 @@ export type AuthUser = {
   name: string;
   email: string;
   role: "ADMIN" | "SALES_MANAGER" | "BDE";
+  canViewCustomers: boolean;
 };
 
 export function getAccessToken(): string | null {
@@ -41,9 +42,11 @@ export function getAuthUser(): AuthUser | null {
         "name" in user &&
         "email" in user &&
         "role" in user &&
+        "canViewCustomers" in user &&
         typeof user.id === "string" &&
         typeof user.name === "string" &&
         typeof user.email === "string" &&
+        typeof user.canViewCustomers === "boolean" &&
         (user.role === "ADMIN" ||
           user.role === "SALES_MANAGER" ||
           user.role === "BDE")
@@ -53,6 +56,7 @@ export function getAuthUser(): AuthUser | null {
           name: user.name,
           email: user.email,
           role: user.role,
+          canViewCustomers: user.canViewCustomers,
         };
       }
       return null;

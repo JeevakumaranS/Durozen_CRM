@@ -7,7 +7,7 @@ import { CustomersService } from "./customers.service";
 
 @Controller("customers")
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles("ADMIN")
+@Roles("ADMIN", "SALES_MANAGER", "BDE")
 export class CustomersController {
   constructor(private readonly customers: CustomersService) {}
   @Get() list(@CurrentUser() user: { sub: string; role: string }) {

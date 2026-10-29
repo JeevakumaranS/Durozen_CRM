@@ -44,23 +44,24 @@ enum MeetingStatus {
 }
 
 model User {
-  id           String        @id @default(uuid(7)) @db.Uuid
-  fullName     String        @map("full_name")
-  email        String        @unique
-  passwordHash String        @map("password_hash")
-  tokenVersion Int           @default(0) @map("token_version")
-  role         UserRole      @default(BDE)
-  isActive     Boolean       @default(true) @map("is_active")
-  isOnline     Boolean       @default(false) @map("is_online")
-  managerId    String?       @map("manager_id") @db.Uuid
-  manager      User?         @relation("ManagerBdes", fields: [managerId], references: [id], onDelete: SetNull)
-  managedBdes  User[]        @relation("ManagerBdes")
-  lastActiveAt DateTime?     @map("last_active_at")
-  leads        Lead[]        @relation("AssignedBde")
-  activities   Activity[]    @relation("ActivityUser")
-  callMessages CallMessage[] @relation("CallMessageUser")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
+  id               String        @id @default(uuid(7)) @db.Uuid
+  fullName         String        @map("full_name")
+  email            String        @unique
+  passwordHash     String        @map("password_hash")
+  tokenVersion     Int           @default(0) @map("token_version")
+  role             UserRole      @default(BDE)
+  canViewCustomers Boolean       @default(false) @map("can_view_customers")
+  isActive         Boolean       @default(true) @map("is_active")
+  isOnline         Boolean       @default(false) @map("is_online")
+  managerId        String?       @map("manager_id") @db.Uuid
+  manager          User?         @relation("ManagerBdes", fields: [managerId], references: [id], onDelete: SetNull)
+  managedBdes      User[]        @relation("ManagerBdes")
+  lastActiveAt     DateTime?     @map("last_active_at")
+  leads            Lead[]        @relation("AssignedBde")
+  activities       Activity[]    @relation("ActivityUser")
+  callMessages     CallMessage[] @relation("CallMessageUser")
+  createdAt        DateTime      @default(now()) @map("created_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
   @@index([managerId])
   @@map("users")

@@ -37,6 +37,7 @@ export class AuthService {
         name: user.fullName,
         email: user.email,
         role: user.role,
+        canViewCustomers: user.canViewCustomers,
       },
     };
   }
@@ -44,7 +45,13 @@ export class AuthService {
   async currentUser(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId, isActive: true },
-      select: { id: true, fullName: true, email: true, role: true },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+        canViewCustomers: true,
+      },
     });
     if (!user) throw new UnauthorizedException();
     return {
@@ -52,6 +59,7 @@ export class AuthService {
       name: user.fullName,
       email: user.email,
       role: user.role,
+      canViewCustomers: user.canViewCustomers,
     };
   }
 

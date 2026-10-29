@@ -46,6 +46,7 @@ const managerNavigation = [
   ["Sales Pipeline", "/pipeline"],
   ["Activities", "/activities"],
   ["Reports", "/reports"],
+  ["My Team", "/my-team"],
 ];
 const bdeNavigation = [
   ["Dashboard", "/dashboard"],
@@ -159,7 +160,13 @@ export default function DashboardLayout({
       .then((currentUser) => {
         setAuthUser(currentUser);
         setUser(currentUser);
-        if (!canAccessRoute(currentUser.role, pathname)) {
+        if (
+          !canAccessRoute(
+            currentUser.role,
+            pathname,
+            currentUser.canViewCustomers,
+          )
+        ) {
           window.location.replace("/dashboard");
           return;
         }
@@ -186,6 +193,10 @@ export default function DashboardLayout({
       : user.role === "SALES_MANAGER"
         ? managerNavigation
         : bdeNavigation;
+  const visibleNavigation =
+    user.role !== "ADMIN" && user.canViewCustomers
+      ? [...navigationForRole, ["Customers", "/customers"]]
+      : navigationForRole;
 
   return (
     <div className="dashboard-shell">
@@ -226,7 +237,7 @@ export default function DashboardLayout({
           <span>DUROZEN CRM</span>
         </Link>
         <nav aria-label="Main navigation">
-          {navigationForRole.map(([label, href]) => {
+          {visibleNavigation.map(([label, href]) => {
               if (label === "Activities") {
                 const activityLinks =
                   user.role === "SALES_MANAGER"

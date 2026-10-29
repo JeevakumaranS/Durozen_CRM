@@ -37,6 +37,7 @@ export class UsersService {
         fullName: true,
         email: true,
         role: true,
+        canViewCustomers: true,
         isActive: true,
         isOnline: true,
         createdAt: true,
@@ -52,6 +53,22 @@ export class UsersService {
     return this.prisma.user.findMany({
       where: { role: "SALES_MANAGER", isActive: true },
       select: { id: true, fullName: true },
+      orderBy: { fullName: "asc" },
+    });
+  }
+
+  listManagedBdes(managerId: string) {
+    return this.prisma.user.findMany({
+      where: { role: "BDE", managerId },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        isActive: true,
+        isOnline: true,
+        lastActiveAt: true,
+        _count: { select: { leads: true } },
+      },
       orderBy: { fullName: "asc" },
     });
   }
@@ -77,6 +94,7 @@ export class UsersService {
           fullName: true,
           email: true,
           role: true,
+          canViewCustomers: true,
           isActive: true,
           isOnline: true,
           createdAt: true,
@@ -115,6 +133,7 @@ export class UsersService {
           email: dto.email.toLowerCase(),
           passwordHash,
           role: dto.role,
+          canViewCustomers: dto.canViewCustomers ?? false,
           managerId: dto.role === "BDE" ? dto.managerId : null,
         },
         select: {
@@ -122,6 +141,7 @@ export class UsersService {
           fullName: true,
           email: true,
           role: true,
+          canViewCustomers: true,
           isActive: true,
           managerId: true,
         },
@@ -154,12 +174,16 @@ export class UsersService {
         data: {
           fullName: dto.fullName.trim(),
           email: dto.email.trim().toLowerCase(),
+          ...(dto.canViewCustomers !== undefined
+            ? { canViewCustomers: dto.canViewCustomers }
+            : {}),
         },
         select: {
           id: true,
           fullName: true,
           email: true,
           role: true,
+          canViewCustomers: true,
           isActive: true,
           managerId: true,
         },

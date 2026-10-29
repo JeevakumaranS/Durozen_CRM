@@ -11,6 +11,7 @@ type TeamUser = {
   fullName: string;
   email: string;
   role: "SALES_MANAGER" | "BDE";
+  canViewCustomers: boolean;
   isActive: boolean;
   isOnline: boolean;
   lastActiveAt: string | null;
@@ -138,11 +139,13 @@ export default function TeamPage() {
   const [password, setPassword] = useState("");
   const [showCreatePassword, setShowCreatePassword] = useState(false);
   const [role, setRole] = useState<CreateRole>("");
+  const [canViewCustomers, setCanViewCustomers] = useState(false);
   const [managerId, setManagerId] = useState("");
   const [creating, setCreating] = useState(false);
   const [editingUser, setEditingUser] = useState<TeamUser | null>(null);
   const [editFullName, setEditFullName] = useState("");
   const [editEmail, setEditEmail] = useState("");
+  const [editCanViewCustomers, setEditCanViewCustomers] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editPassword, setEditPassword] = useState("");
   const [showEditPassword, setShowEditPassword] = useState(false);
@@ -270,6 +273,7 @@ export default function TeamPage() {
           email,
           password,
           role,
+          canViewCustomers,
           managerId: role === "BDE" ? managerId || null : null,
         }),
       });
@@ -278,6 +282,7 @@ export default function TeamPage() {
       setPassword("");
       setShowCreatePassword(false);
       setRole("");
+      setCanViewCustomers(false);
       setManagerId("");
       setShowCreateForm(false);
       setPage(1);
@@ -297,12 +302,14 @@ export default function TeamPage() {
     setShowCreateForm(false);
     setPassword("");
     setShowCreatePassword(false);
+    setCanViewCustomers(false);
   }
 
   function openEdit(user: TeamUser) {
     setEditingUser(user);
     setEditFullName(user.fullName);
     setEditEmail(user.email);
+    setEditCanViewCustomers(user.canViewCustomers);
     setEditPassword("");
     setShowEditPassword(false);
   }
@@ -311,6 +318,7 @@ export default function TeamPage() {
     setEditingUser(null);
     setEditPassword("");
     setShowEditPassword(false);
+    setEditCanViewCustomers(false);
   }
 
   async function updateUser(event: FormEvent<HTMLFormElement>) {
@@ -323,6 +331,7 @@ export default function TeamPage() {
         body: JSON.stringify({
           fullName: editFullName.trim(),
           email: editEmail.trim(),
+          canViewCustomers: editCanViewCustomers,
         }),
       });
       closeEditForm();
@@ -670,6 +679,27 @@ export default function TeamPage() {
                   </select>
                 </label>
               )}
+              {role && (
+                <label className="form-wide team-customer-access">
+                  <span>Customer section</span>
+                  <span className="team-customer-access-control">
+                    <input
+                      aria-label="Show Customers section for this user"
+                      type="checkbox"
+                      role="switch"
+                      checked={canViewCustomers}
+                      onChange={(event) =>
+                        setCanViewCustomers(event.target.checked)
+                      }
+                    />
+                    Show Customers section for this user
+                  </span>
+                  {/* <small>
+                    Adds the Customers page to their navigation and grants
+                    access to won accounts.
+                  </small> */}
+                </label>
+              )}
               <div className="form-footer">
                 <p>
                   Use at least 10 characters and share the temporary password
@@ -734,6 +764,25 @@ export default function TeamPage() {
                   value={editingUser.role.replaceAll("_", " ")}
                   readOnly
                 />
+              </label>
+              <label className="form-wide team-customer-access">
+                <span>Customer section</span>
+                <span className="team-customer-access-control">
+                  <input
+                    aria-label="Show Customers section for this user"
+                    type="checkbox"
+                    role="switch"
+                    checked={editCanViewCustomers}
+                    onChange={(event) =>
+                      setEditCanViewCustomers(event.target.checked)
+                    }
+                  />
+                  Show Customers section for this user
+                </span>
+                {/* <small>
+                  Adds the Customers page to their navigation and grants
+                  access to won accounts.
+                </small> */}
               </label>
               <div className="form-footer">
                 <p>Changing the email address or password will sign out the current account.</p>
