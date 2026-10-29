@@ -15,8 +15,10 @@ export class DashboardService {
       tasks,
       meetings,
       callsAndMessages,
-      proposals,
-      negotiations,
+      proposalFollowUps,
+      proposalResponses,
+      negotiationFollowUps,
+      negotiationResponses,
     ] = await Promise.all([
       this.prisma.followUp.count({
         where: {
@@ -35,10 +37,40 @@ export class DashboardService {
         where: { status: "PENDING", type: "Proposal Follow-up", lead },
       }),
       this.prisma.followUp.count({
+        where: {
+          status: "COMPLETED",
+          type: "Proposal Follow-up",
+          lead,
+          OR: [
+            { proposal: { is: { responseSavedAt: null } } },
+            {
+              proposalId: null,
+              lead: { proposals: { some: { responseSavedAt: null } } },
+            },
+          ],
+        },
+      }),
+      this.prisma.followUp.count({
         where: { status: "PENDING", type: "Negotiation", lead },
+      }),
+      this.prisma.followUp.count({
+        where: {
+          status: "COMPLETED",
+          type: "Negotiation",
+          lead,
+          OR: [
+            { negotiation: { is: { responseSavedAt: null } } },
+            {
+              negotiationId: null,
+              lead: { negotiations: { some: { responseSavedAt: null } } },
+            },
+          ],
+        },
       }),
     ]);
 
+    const proposals = proposalFollowUps + proposalResponses;
+    const negotiations = negotiationFollowUps + negotiationResponses;
     return { tasks, meetings, callsAndMessages, proposals, negotiations };
   }
 

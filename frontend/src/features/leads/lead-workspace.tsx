@@ -268,7 +268,8 @@ export function LeadWorkspace({
   const [loading, setLoading] = useState(true);
   const [stageFormError, setStageFormError] = useState("");
   const [canAssignLeads, setCanAssignLeads] = useState(false);
-  const userRole = getAuthUser()?.role;
+  const authUser = getAuthUser();
+  const userRole = authUser?.role;
   const isAdmin = userRole === "ADMIN";
   const canCreateLeads =
     userRole === "ADMIN" ||
@@ -407,6 +408,11 @@ export function LeadWorkspace({
   }, []);
 
   useEffect(() => {
+    if (userRole !== "BDE" || !authUser?.id || editingLeadId) return;
+    setForm((current) => ({ ...current, assignedBdeId: authUser.id }));
+  }, [authUser?.id, editingLeadId, userRole]);
+
+  useEffect(() => {
     if (view !== "pipeline") return;
     const savedDisplay = window.sessionStorage.getItem(
       "durozen_pipeline_display",
@@ -468,7 +474,11 @@ export function LeadWorkspace({
         });
         setForm({
           ...createEmptyLeadForm(),
-          assignedBdeId: isAdmin ? "" : (assignees[0]?.id ?? ""),
+          assignedBdeId: isAdmin
+            ? ""
+            : userRole === "BDE"
+              ? (authUser?.id ?? "")
+              : (assignees[0]?.id ?? ""),
         });
         setEditingLeadId(null);
         setOriginalAssignedBdeId("");
@@ -512,7 +522,11 @@ export function LeadWorkspace({
       });
       setForm({
         ...createEmptyLeadForm(),
-        assignedBdeId: isAdmin ? "" : (assignees[0]?.id ?? ""),
+        assignedBdeId: isAdmin
+          ? ""
+          : userRole === "BDE"
+            ? (authUser?.id ?? "")
+            : (assignees[0]?.id ?? ""),
       });
       setShowForm(false);
       setOriginalAssignedBdeId("");
@@ -597,7 +611,11 @@ export function LeadWorkspace({
   function openCreateLeadForm() {
     setForm({
       ...createEmptyLeadForm(),
-      assignedBdeId: isAdmin ? "" : (assignees[0]?.id ?? ""),
+      assignedBdeId: isAdmin
+        ? ""
+        : userRole === "BDE"
+          ? (authUser?.id ?? "")
+          : (assignees[0]?.id ?? ""),
     });
     setEditingLeadId(null);
     setOriginalAssignedBdeId("");
@@ -3301,13 +3319,23 @@ export function LeadWorkspace({
                     Assigned BDE {!editingLeadId && "*"}
                     <select
                       required={!editingLeadId}
-                      disabled={Boolean(editingLeadId) && !canAssignLeads}
+                      disabled={
+                        (userRole === "BDE" && !editingLeadId) ||
+                        (Boolean(editingLeadId) && !canAssignLeads)
+                      }
                       value={form.assignedBdeId}
                       onChange={(event) =>
                         setForm({ ...form, assignedBdeId: event.target.value })
                       }
                     >
                       <option value="">No BDE selected</option>
+                      {userRole === "BDE" &&
+                        authUser &&
+                        !assignees.some((user) => user.id === authUser.id) && (
+                          <option value={authUser.id}>
+                            {authUser.name}
+                          </option>
+                        )}
                       {editingLeadId &&
                         originalAssignedBdeId &&
                         !assignees.some(
